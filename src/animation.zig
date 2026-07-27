@@ -233,6 +233,25 @@ pub const SamplingContext = struct {
         @memset(self.rotation_keys, 0);
         @memset(self.scale_keys, 0);
     }
+
+    pub fn resize(self: *SamplingContext, max_tracks: usize) !void {
+        if (max_tracks == self.translation_keys.len) {
+            self.invalidate();
+            return;
+        }
+        const translations = try self.allocator.alloc(u32, max_tracks);
+        errdefer self.allocator.free(translations);
+        const rotations = try self.allocator.alloc(u32, max_tracks);
+        errdefer self.allocator.free(rotations);
+        const scales = try self.allocator.alloc(u32, max_tracks);
+        self.allocator.free(self.translation_keys);
+        self.allocator.free(self.rotation_keys);
+        self.allocator.free(self.scale_keys);
+        self.translation_keys = translations;
+        self.rotation_keys = rotations;
+        self.scale_keys = scales;
+        self.invalidate();
+    }
 };
 
 fn keyIndex(comptime Key: type, keys: []const Key, ratio: f32, cached: *u32, forward: bool) usize {
@@ -305,6 +324,27 @@ pub fn findJoint(skeleton: Skeleton, name: []const u8) ?usize {
         if (std.mem.eql(u8, joint_name, name)) return i;
     }
     return null;
+}
+
+pub fn countTranslationKeyframes(value: Animation, track: ?usize) usize {
+    if (track) |index| return if (index < value.tracks.len) value.tracks[index].translations.len else 0;
+    var count: usize = 0;
+    for (value.tracks) |joint_track| count += joint_track.translations.len;
+    return count;
+}
+
+pub fn countRotationKeyframes(value: Animation, track: ?usize) usize {
+    if (track) |index| return if (index < value.tracks.len) value.tracks[index].rotations.len else 0;
+    var count: usize = 0;
+    for (value.tracks) |joint_track| count += joint_track.rotations.len;
+    return count;
+}
+
+pub fn countScaleKeyframes(value: Animation, track: ?usize) usize {
+    if (track) |index| return if (index < value.tracks.len) value.tracks[index].scales.len else 0;
+    var count: usize = 0;
+    for (value.tracks) |joint_track| count += joint_track.scales.len;
+    return count;
 }
 
 pub fn isLeaf(skeleton: Skeleton, joint: usize) bool {

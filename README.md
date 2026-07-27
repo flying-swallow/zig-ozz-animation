@@ -16,7 +16,8 @@ The repository currently provides:
 - bounded, versioned, little-endian `.zozz` serialization;
 - a pure-Zig converter for every tagged Ozz 0.16 archive type, in big- or
   little-endian form, including concatenated motion tracks and mesh streams;
-- glTF/GLB skin hierarchy import through the Zig `cglf` package;
+- glTF/GLB hierarchy, skin, and animation import through the Zig `cglf`
+  package, including external buffer URIs;
 - native and WebAssembly-compatible core modules (graphical samples are a
   separate desktop concern).
 
@@ -28,8 +29,14 @@ package hash.
 ```sh
 zig build
 zig build test
+zig build check
 zig build benchmark
 ```
+
+`zig build test` also runs the semantic upstream conformance package under
+`tests/`. That package fetches the pinned Ozz source and media fixtures into
+Zig's package cache on demand. Ordinary `zig build` does not fetch or configure
+the upstream test dependency.
 
 The installed command is `zig-out/bin/ozz`.
 
@@ -45,9 +52,11 @@ RawAnimation v3, and v1 raw skeleton/tracks/meshes). Older archived schemas
 that Ozz 0.16 itself rejects are reported as unsupported instead of being
 guessed.
 
-`import` currently emits `raw_skeleton.zozz` and `skeleton.zozz` for skin 0.
-The glTF conversion API remains filesystem-independent and passes source bytes
-to cglf, which handles JSON/GLB parsing and node transforms.
+`import` emits `raw_skeleton.zozz`, `skeleton.zozz`, and numbered raw/runtime
+animation archives for every clip in the source. Skeleton-only conversion can
+remain filesystem-independent by passing source bytes to `importSkeleton`;
+`importAnimationsFile` accepts a path so cglf can resolve external `.bin`
+buffers.
 
 ## Native archive
 

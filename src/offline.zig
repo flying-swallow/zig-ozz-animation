@@ -123,6 +123,21 @@ pub const AnimationBuilder = struct {
         var scales: std.ArrayList(runtime.Float3Key) = .empty;
         defer scales.deinit(allocator);
 
+        // Input slices below point into these lists. Reserve the final sizes up
+        // front so later tracks cannot invalidate earlier slices by growing a
+        // backing allocation.
+        var translation_count: usize = 0;
+        var rotation_count: usize = 0;
+        var scale_count: usize = 0;
+        for (raw.tracks) |track| {
+            translation_count = try std.math.add(usize, translation_count, track.translations.len);
+            rotation_count = try std.math.add(usize, rotation_count, track.rotations.len);
+            scale_count = try std.math.add(usize, scale_count, track.scales.len);
+        }
+        try translations.ensureTotalCapacityPrecise(allocator, translation_count);
+        try rotations.ensureTotalCapacityPrecise(allocator, rotation_count);
+        try scales.ensureTotalCapacityPrecise(allocator, scale_count);
+
         for (raw.tracks, 0..) |track, i| {
             const t_start = translations.items.len;
             for (track.translations) |key| try translations.append(allocator, .{

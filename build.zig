@@ -169,6 +169,10 @@ pub fn build(b: *std.Build) void {
         "build",
         "test",
     });
+    conformance_tests.addArg(b.fmt("-Doptimize={s}", .{@tagName(optimize)}));
+    conformance_tests.addArg(b.fmt("-Dtarget={s}", .{
+        target.query.zigTriple(b.allocator) catch @panic("OOM"),
+    }));
     conformance_tests.setCwd(b.path("tests"));
     conformance_tests.stdio = .inherit;
     test_step.dependOn(&conformance_tests.step);
@@ -184,6 +188,10 @@ pub fn build(b: *std.Build) void {
         "build",
         "check",
     });
+    conformance_check.addArg(b.fmt("-Doptimize={s}", .{@tagName(optimize)}));
+    conformance_check.addArg(b.fmt("-Dtarget={s}", .{
+        target.query.zigTriple(b.allocator) catch @panic("OOM"),
+    }));
     conformance_check.setCwd(b.path("tests"));
     conformance_check.stdio = .inherit;
     check_step.dependOn(&conformance_check.step);

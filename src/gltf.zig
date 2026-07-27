@@ -37,7 +37,7 @@ const ParsedFile = struct {
     data: *c.cgltf_data,
 
     fn init(allocator: std.mem.Allocator, path: []const u8) !ParsedFile {
-        const path_z = try allocator.dupeZ(u8, path);
+        const path_z = try allocator.dupeSentinel(u8, path, 0);
         defer allocator.free(path_z);
         var options: c.cgltf_options = std.mem.zeroes(c.cgltf_options);
         var data: ?*c.cgltf_data = null;

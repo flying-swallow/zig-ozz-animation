@@ -355,3 +355,206 @@ test "JobValidityAdditive/BlendingJob" {
         .additive_layers = &.{.{ .transforms = &.{}, .weight = 1 }},
     }, &output));
 }
+
+test "Sampling4Track2Keys/SamplingJob" {
+    var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
+        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 1 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 2 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 3 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 4 } } } },
+    });
+    defer value.deinit();
+    var context = try animation.SamplingContext.init(std.testing.allocator, 4);
+    defer context.deinit();
+    var output: [1]math.SoaTransform = undefined;
+    try animation.sample(&value, 0.5, &context, &output);
+    for (0..4) |lane| {
+        try h.expectFloat(@as(f32, @floatFromInt(lane + 1)) * 0.5, math.soaLane(output[0], lane).translation.x);
+    }
+}
+
+test "Cache/SamplingJob" {
+    var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{.{
+        .translations = &.{
+            .{ .ratio = 0, .value = .zero },
+            .{ .ratio = 0.25, .value = .{ .x = 1 } },
+            .{ .ratio = 0.5, .value = .{ .x = 2 } },
+            .{ .ratio = 0.75, .value = .{ .x = 3 } },
+            .{ .ratio = 1, .value = .{ .x = 4 } },
+        },
+    }});
+    defer value.deinit();
+    var context = try animation.SamplingContext.init(std.testing.allocator, 1);
+    defer context.deinit();
+    var output: [1]math.SoaTransform = undefined;
+    for ([_]f32{ 0.1, 0.6, 0.9, 0.2 }) |ratio| {
+        try animation.sample(&value, ratio, &context, &output);
+        try h.expectFloat(ratio * 4, math.soaLane(output[0], 0).translation.x);
+    }
+}
+
+test "CacheResize/SamplingJob" {
+    var context = try animation.SamplingContext.init(std.testing.allocator, 1);
+    defer context.deinit();
+    try context.resize(8);
+    try std.testing.expectEqual(@as(usize, 8), context.translation_keys.len);
+    try context.resize(0);
+    try std.testing.expectEqual(@as(usize, 0), context.rotation_keys.len);
+}
+
+test "CountKeyframes/AnimationUtils" {
+    var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
+        .{
+            .translations = &.{
+                .{ .ratio = 0, .value = .zero },
+                .{ .ratio = 0.5, .value = .zero },
+                .{ .ratio = 1, .value = .zero },
+            },
+            .rotations = &.{.{ .ratio = 0.7, .value = .identity }},
+        },
+        .{ .scales = &.{.{ .ratio = 0.1, .value = .one }} },
+    });
+    defer value.deinit();
+    try std.testing.expectEqual(@as(usize, 3), animation.countTranslationKeyframes(value, null));
+    try std.testing.expectEqual(@as(usize, 1), animation.countRotationKeyframes(value, null));
+    try std.testing.expectEqual(@as(usize, 1), animation.countScaleKeyframes(value, null));
+    try std.testing.expectEqual(@as(usize, 0), animation.countTranslationKeyframes(value, 1));
+}
+
+fn expectTrackSample(comptime T: type, a: T, b: T) !void {
+    var track = try animation.Track(T).init(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = a },
+        .{ .ratio = 1, .value = b },
+    }, .linear);
+    defer track.deinit();
+    _ = track.sampleAt(0.5);
+    try std.testing.expectEqual(a, track.sampleAt(-1));
+    try std.testing.expectEqual(b, track.sampleAt(2));
+}
+
+test "Float2/TrackSamplingJob" {
+    try expectTrackSample(math.Float2, .zero, .one);
+}
+
+test "Float3/TrackSamplingJob" {
+    try expectTrackSample(math.Float3, .zero, .one);
+}
+
+test "Float4/TrackSamplingJob" {
+    try expectTrackSample(math.Float4, .zero, .one);
+}
+
+test "Bounds/TrackSamplingJob" {
+    var track = try animation.FloatTrack.init(std.testing.allocator, "", &.{
+        .{ .ratio = 0.25, .value = 1 },
+        .{ .ratio = 0.75, .value = 2 },
+    }, .linear);
+    defer track.deinit();
+    try h.expectFloat(1, track.sampleAt(-46));
+    try h.expectFloat(2, track.sampleAt(93));
+}
+
+test "Constant/TrackSamplingJob" {
+    var track = try animation.FloatTrack.init(std.testing.allocator, "", &.{
+        .{ .ratio = 0.46, .value = 93 },
+    }, .linear);
+    defer track.deinit();
+    try h.expectFloat(93, track.sampleAt(0));
+    try h.expectFloat(93, track.sampleAt(1));
+}
+
+test "SquareStep/TrackEdgeTriggerJob" {
+    var track = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.25, .value = 1, .interpolation = .step },
+        .{ .ratio = 0.75, .value = 0, .interpolation = .step },
+    });
+    defer track.deinit();
+    var iterator = animation.TrackEdgeIterator.init(&track, 0, 1, 0.5);
+    const rising = iterator.next().?;
+    const falling = iterator.next().?;
+    try h.expectFloat(0.25, rising.ratio);
+    try std.testing.expect(rising.rising);
+    try h.expectFloat(0.75, falling.ratio);
+    try std.testing.expect(!falling.rising);
+}
+
+test "NoRange/TrackEdgeTriggerJob" {
+    var track = try animation.FloatTrack.init(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0 },
+        .{ .ratio = 1, .value = 1 },
+    }, .linear);
+    defer track.deinit();
+    var iterator = animation.TrackEdgeIterator.init(&track, 0.5, 0.5, 0.5);
+    try std.testing.expectEqual(@as(?animation.TrackEdge, null), iterator.next());
+}
+
+test "Empty/TrackEdgeTriggerJob" {
+    // Runtime tracks cannot be sampled empty, but triggering treats them as an
+    // empty range without dereferencing a key.
+    var raw = try ozz.offline.RawFloatTrack.init(std.testing.allocator, "", &.{});
+    defer raw.deinit();
+    var track = try ozz.offline.buildTrack(f32, std.testing.allocator, raw);
+    defer track.deinit();
+    var iterator = animation.TrackEdgeIterator.init(&track, 0, 1, 0.5);
+    try std.testing.expectEqual(@as(?animation.TrackEdge, null), iterator.next());
+}
+
+test "Twist/IKAimJob" {
+    const result = try animation.aimIk(.{
+        .target = .x_axis,
+        .joint = .identity,
+        .twist_angle = @as(f32, std.math.pi) / 2,
+    });
+    try h.expectFloat3(.z_axis, math.Quaternion.rotate(result.correction, .y_axis));
+}
+
+test "Offset/IKAimJob" {
+    const result = try animation.aimIk(.{
+        .target = .{ .x = 2, .y = 1 },
+        .joint = .identity,
+        .offset = .y_axis,
+    });
+    try std.testing.expect(result.reached);
+}
+
+test "TargetTooClose/IKAimJob" {
+    const result = try animation.aimIk(.{
+        .target = .zero,
+        .joint = .identity,
+    });
+    try std.testing.expect(!result.reached);
+    try h.expectQuaternion(.identity, result.correction);
+}
+
+test "ZeroLengthBoneChain/IKTwoBoneJob" {
+    const result = try animation.twoBoneIk(.{
+        .target = .x_axis,
+        .start_joint = .identity,
+        .mid_joint = .identity,
+        .end_joint = .identity,
+    });
+    try std.testing.expect(!result.reached);
+}
+
+test "StartJointCorrection/IKTwoBoneJob" {
+    const result = try animation.twoBoneIk(.{
+        .target = .{ .x = 1, .y = 1 },
+        .start_joint = .identity,
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .x_axis }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+    });
+    try std.testing.expect(math.Quaternion.dot(.identity, result.start_correction) < 0.999);
+}
+
+test "JointRestPose/SkeletonUtils" {
+    var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
+        .{
+            .name = "root",
+            .parent = animation.no_parent,
+            .rest_pose = .{ .translation = .{ .x = 4, .y = 5, .z = 6 } },
+        },
+    });
+    defer skeleton.deinit();
+    try h.expectFloat3(.{ .x = 4, .y = 5, .z = 6 }, skeleton.jointRestPose(0).translation);
+}

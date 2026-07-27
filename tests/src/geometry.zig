@@ -66,3 +66,50 @@ test "RunInverseTranspose/SkinningJob" {
     try h.expectFloat3(.{ .x = 2, .y = 3, .z = 4 }, positions[0]);
     try h.expectFloat3(.{ .x = 0.5 }, normals[0]);
 }
+
+test "RunStrided/SkinningJob" {
+    const PaddedFloat3 = extern struct {
+        value: math.Float3,
+        padding: f32 = 93,
+    };
+    const Indices = extern struct {
+        value: [2]u16,
+        padding: u32 = 46,
+    };
+    const Weights = extern struct {
+        value: f32,
+        padding: f32 = 58,
+    };
+    const matrices = [_]math.Float4x4{
+        math.Float4x4.identity,
+        math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+    };
+    var inputs = [_]PaddedFloat3{
+        .{ .value = .{ .x = 1 } },
+        .{ .value = .{ .x = 3 } },
+    };
+    var indices = [_]Indices{
+        .{ .value = .{ 0, 1 } },
+        .{ .value = .{ 1, 0 } },
+    };
+    var weights = [_]Weights{
+        .{ .value = 0.25 },
+        .{ .value = 0.5 },
+    };
+    var outputs: [2]PaddedFloat3 = undefined;
+    try geometry.skinStrided(.{
+        .vertex_count = 2,
+        .influences_count = 2,
+        .joint_matrices = &matrices,
+        .joint_indices = std.mem.sliceAsBytes(&indices),
+        .joint_indices_stride = @sizeOf(Indices),
+        .joint_weights = std.mem.sliceAsBytes(&weights),
+        .joint_weights_stride = @sizeOf(Weights),
+        .input_positions = std.mem.sliceAsBytes(&inputs),
+        .input_positions_stride = @sizeOf(PaddedFloat3),
+        .output_positions = std.mem.sliceAsBytes(&outputs),
+        .output_positions_stride = @sizeOf(PaddedFloat3),
+    });
+    try h.expectFloat3(.{ .x = 2.5 }, outputs[0].value);
+    try h.expectFloat3(.{ .x = 4 }, outputs[1].value);
+}

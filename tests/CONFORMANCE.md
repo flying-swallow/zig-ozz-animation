@@ -1,9 +1,12 @@
 # Ozz semantic conformance ledger
 
 Upstream is pinned to `6cbdc790123aa4731d82e255df187b3a8a808256`.
-Every GoogleTest in a `ported` or `adapted` source is represented by the Zig
-suite named in the last column. `adapted` means the behavior is tested through
-the idiomatic Zig API rather than reproducing a C++ job or container API.
+The pinned tree contains 68 C++ test sources, 386 GoogleTest declarations, and
+233 CTest registrations. The inventory test verifies those totals and requires
+every source to match one of the classifications below. Applicable assertions
+are consolidated into 130 focused Zig behavior tests rather than reproducing
+GoogleTest/CMake scaffolding one-for-one. `adapted` means behavior is tested
+through the idiomatic Zig or Caliper API.
 
 | Upstream test source group | Status | Zig suite / reason |
 | --- | --- | --- |
@@ -21,7 +24,8 @@ the idiomatic Zig API rather than reproducing a C++ job or container API.
 | Collada/DAE importer registrations | N/A | Collada is deprecated and explicitly excluded |
 | `animation/offline/tools/test2ozz.cc` fake importer behavior | N/A | C++ test-plugin plumbing |
 | `animation/offline/tools/CMakeLists.txt` shared CLI behavior | adapted | Zig CLI tests |
-| `base/maths/*_tests.cc` | adapted | `math.zig`; Caliper-backed Zig types |
+| Scalar/vector/quaternion/transform/box/rect math behavior | adapted | `math.zig`; Caliper-backed Zig types |
+| C++ SIMD/SoA instruction-level API and archive layout | N/A | replaced by Zig vectors and Caliper; runtime SoA behavior remains tested |
 | `base/encode/group_varint_tests.cc` | N/A | No public Zig group-varint API |
 | `base/endianness_tests.cc` | adapted | `archive.zig` |
 | `base/io/archive_tests*.cc` | adapted | `archive.zig`; native and legacy readers |
@@ -39,3 +43,7 @@ the idiomatic Zig API rather than reproducing a C++ job or container API.
 
 The `SkinningJob.Run` performance registration is maintained under
 `zig build benchmark`, not the deterministic unit-test step.
+
+The fixture dependency contains FBX and Collada media because Zig fetches the
+pinned upstream Git tree as one package, but no test references or imports
+those assets.
