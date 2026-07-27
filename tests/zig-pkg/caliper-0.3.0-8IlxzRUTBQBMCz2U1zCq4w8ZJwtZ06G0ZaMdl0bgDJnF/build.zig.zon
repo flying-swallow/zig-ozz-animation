@@ -1,0 +1,19 @@
+.{
+    .name = .caliper,
+    .version = "0.3.0",
+    .fingerprint = 0xc06909ecd7189f0, // Changing this has security and trust implications.
+    .dependencies = .{
+        .zbench = .{
+            .url = "git+https://github.com/hendriknielaender/zBench.git#f12a2262bcd9d300207890555c577da5e29de453",
+            .hash = "zbench-0.14.1-YTdc781OAQCR6wxqkgAwm9bG4TnFGzm8c9aE-ZPiTAU1",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}

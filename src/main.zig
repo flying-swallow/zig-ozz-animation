@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: GPL-2.0-only
+const std = @import("std");
+const ozz = @import("zig_ozz_animation");
+
+const usage =
+    \\usage:
+    \\  ozz inspect <archive>
+    \\  ozz migrate <legacy.ozz> <native.zozz>
+    \\  ozz import <source.gltf|source.glb> --output <directory>
+    \\  ozz config print
+    \\
+;
+
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
+    const args = try init.minimal.args.toSlice(allocator);
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_file = std.Io.File.stdout().writer(init.io, &stdout_buffer);
+    const stdout = &stdout_file.interface;
+    defer stdout.flush() catch {};
+
+    if (args.len < 2 or std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h")) {
+        try stdout.writeAll(usage);
+        return;
+    }
+    if (std.mem.eql(u8, args[1], "inspect")) {
+        if (args.len != 3) return fail("inspect expects one archive path", .{});
+        return inspect(init.io, allocator, stdout, args[2]);
+    }
+    if (std.mem.eql(u8, args[1], "migrate")) {
+        if (args.len != 4) return fail("migrate expects input and output paths", .{});
+        return migrate(init.io, allocator, stdout, args[2], args[3]);
+    }
+    if (std.mem.eql(u8, args[1], "config")) {
+        if (args.len != 3 or !std.mem.eql(u8, args[2], "print")) {
+            return fail("config expects the 'print' subcommand", .{});
+        }
+        try stdout.writeAll(
+            \\{"archive":{"magic":"ZOZZBIN\\u0000","container_version":1,"endianness":"little"},"limits":{"joints":1024},"math":"caliper","gltf":"cglf","fbx":"disabled","rhi_samples":"disabled"}
+            \\
+        );
+        return;
+    }
+    if (std.mem.eql(u8, args[1], "import")) {
+        if (args.len != 5 or !std.mem.eql(u8, args[3], "--output")) {
+            return fail("import expects <source.gltf|source.glb> --output <directory>", .{});
+        }
+        return importGltf(init.io, allocator, stdout, args[2], args[4]);
+    }
+    return fail("unknown command '{s}'\n\n{s}", .{ args[1], usage });
+}
+
+fn importGltf(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    status: *std.Io.Writer,
+    input_path: []const u8,
+    output_dir: []const u8,
+) !void {
+    const bytes = try readInput(io, allocator, input_path);
+    var raw = try ozz.gltf.importSkeleton(allocator, bytes, 0);
+    defer raw.deinit();
+    var skeleton = try ozz.offline.SkeletonBuilder.build(allocator, raw);
+    defer skeleton.deinit();
+
+    var raw_output: std.Io.Writer.Allocating = .init(allocator);
+    defer raw_output.deinit();
+    try ozz.io.writeRawSkeleton(allocator, &raw_output.writer, raw);
+    var runtime_output: std.Io.Writer.Allocating = .init(allocator);
+    defer runtime_output.deinit();
+    try ozz.io.writeSkeleton(allocator, &runtime_output.writer, skeleton);
+
+    const cwd = std.Io.Dir.cwd();
+    try cwd.createDirPath(io, output_dir);
+    const raw_path = try std.fs.path.join(allocator, &.{ output_dir, "raw_skeleton.zozz" });
+    const skeleton_path = try std.fs.path.join(allocator, &.{ output_dir, "skeleton.zozz" });
+    try cwd.writeFile(io, .{ .sub_path = raw_path, .data = raw_output.writer.buffered() });
+    try cwd.writeFile(io, .{ .sub_path = skeleton_path, .data = runtime_output.writer.buffered() });
+
+    var animation_count: usize = 0;
+    const animations_result = ozz.gltf.importAnimationsFile(allocator, input_path, skeleton);
+    if (animations_result) |animations| {
+        defer ozz.gltf.deinitAnimations(allocator, animations);
+        for (animations, 0..) |raw_animation, index| {
+            var raw_animation_output: std.Io.Writer.Allocating = .init(allocator);
+            defer raw_animation_output.deinit();
+            try ozz.io.writeRawAnimation(allocator, &raw_animation_output.writer, raw_animation);
+            const raw_animation_path = try std.fmt.allocPrint(
+                allocator,
+                "{s}/raw_animation_{d}.zozz",
+                .{ output_dir, index },
+            );
+            try cwd.writeFile(io, .{
+                .sub_path = raw_animation_path,
+                .data = raw_animation_output.writer.buffered(),
+            });
+
+            var runtime_animation = try ozz.offline.AnimationBuilder.build(allocator, raw_animation);
+            defer runtime_animation.deinit();
+            var animation_output: std.Io.Writer.Allocating = .init(allocator);
+            defer animation_output.deinit();
+            try ozz.io.writeAnimation(allocator, &animation_output.writer, runtime_animation);
+            const animation_path = try std.fmt.allocPrint(
+                allocator,
+                "{s}/animation_{d}.zozz",
+                .{ output_dir, index },
+            );
+            try cwd.writeFile(io, .{
+                .sub_path = animation_path,
+                .data = animation_output.writer.buffered(),
+            });
+            animation_count += 1;
+        }
+    } else |err| switch (err) {
+        ozz.gltf.Error.MissingAnimation => {},
+        else => return err,
+    }
+
+    try status.print("imported {s}: {d} joints, {d} animation{s} -> {s}\n", .{
+        input_path,
+        skeleton.numJoints(),
+        animation_count,
+        if (animation_count == 1) "" else "s",
+        output_dir,
+    });
+}
+
+fn fail(comptime format: []const u8, args: anytype) error{InvalidArguments} {
+    std.debug.print("ozz: " ++ format ++ "\n", args);
+    return error.InvalidArguments;
+}
+
+fn readInput(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) ![]u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024));
+}
+
+fn inspect(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    writer: *std.Io.Writer,
+    path: []const u8,
+) !void {
+    const bytes = try readInput(io, allocator, path);
+    if (bytes.len >= ozz.io.magic.len and std.mem.eql(u8, bytes[0..ozz.io.magic.len], ozz.io.magic)) {
+        var reader = std.Io.Reader.fixed(bytes);
+        const header = try ozz.io.readHeader(&reader, .{});
+        try writer.print("format: native\nkind: {s}\nschema: {d}\npayload: {d} bytes\n", .{
+            @tagName(header.kind),
+            header.schema_version,
+            header.payload_len,
+        });
+    } else {
+        const kind = try ozz.legacy.detect(bytes);
+        try writer.print("format: legacy ozz\nkind: {s}\nnative-kind: {s}\n", .{
+            @tagName(kind),
+            @tagName(kind.nativeKind()),
+        });
+    }
+}
+
+fn migrate(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    status: *std.Io.Writer,
+    input_path: []const u8,
+    output_path: []const u8,
+) !void {
+    const bytes = try readInput(io, allocator, input_path);
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    var offset: usize = 0;
+    var object_count: usize = 0;
+    var first_kind: ?ozz.legacy.Kind = null;
+    while (offset < bytes.len) {
+        const view = if (offset == 0) bytes else blk: {
+            const prefixed = try allocator.alloc(u8, bytes.len - offset + 1);
+            prefixed[0] = bytes[0];
+            @memcpy(prefixed[1..], bytes[offset..]);
+            break :blk prefixed;
+        };
+        const kind = try ozz.legacy.detect(view);
+        first_kind = first_kind orelse kind;
+        const consumed = try migrateOne(kind, allocator, view, &output.writer);
+        if (consumed <= 1 or consumed > view.len) return error.InvalidLegacyArchive;
+        offset += if (offset == 0) consumed else consumed - 1;
+        object_count += 1;
+    }
+
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = output_path, .data = output.writer.buffered() });
+    try status.print("migrated {s} -> {s} ({s}, {d} object{s})\n", .{
+        input_path,
+        output_path,
+        @tagName(first_kind.?),
+        object_count,
+        if (object_count == 1) "" else "s",
+    });
+}
+
+fn migrateOne(
+    kind: ozz.legacy.Kind,
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    writer: *std.Io.Writer,
+) !usize {
+    switch (kind) {
+        .skeleton => {
+            var value = try ozz.legacy.readSkeleton(allocator, bytes, .{});
+            defer value.deinit();
+            try ozz.io.writeSkeleton(allocator, writer, value);
+        },
+        .float_track => return migrateTrack(f32, allocator, bytes, writer),
+        .float2_track => return migrateTrack(ozz.math.Float2, allocator, bytes, writer),
+        .float3_track => return migrateTrack(ozz.math.Float3, allocator, bytes, writer),
+        .float4_track => return migrateTrack(ozz.math.Float4, allocator, bytes, writer),
+        .quaternion_track => return migrateTrack(ozz.math.Quaternion, allocator, bytes, writer),
+        .raw_skeleton => {
+            var value = try ozz.legacy.readRawSkeleton(allocator, bytes, .{});
+            defer value.deinit();
+            try ozz.io.writeRawSkeleton(allocator, writer, value);
+        },
+        .raw_animation => {
+            var value = try ozz.legacy.readRawAnimation(allocator, bytes, .{});
+            defer value.deinit();
+            try ozz.io.writeRawAnimation(allocator, writer, value);
+        },
+        .raw_float_track => try migrateRawTrack(f32, allocator, bytes, writer),
+        .raw_float2_track => try migrateRawTrack(ozz.math.Float2, allocator, bytes, writer),
+        .raw_float3_track => try migrateRawTrack(ozz.math.Float3, allocator, bytes, writer),
+        .raw_float4_track => try migrateRawTrack(ozz.math.Float4, allocator, bytes, writer),
+        .raw_quaternion_track => try migrateRawTrack(ozz.math.Quaternion, allocator, bytes, writer),
+        .animation => {
+            var value = try ozz.legacy.readAnimation(allocator, bytes, .{});
+            defer value.deinit();
+            try ozz.io.writeAnimation(allocator, writer, value);
+        },
+        .sample_mesh => {
+            var consumed: usize = 0;
+            var value = try ozz.legacy.readMeshPrefix(allocator, bytes, .{}, &consumed);
+            defer value.deinit();
+            try ozz.io.writeMesh(allocator, writer, value);
+            return consumed;
+        },
+        .sample_mesh_part => {
+            const part = try ozz.legacy.readMeshPart(allocator, bytes, .{});
+            const parts = try allocator.alloc(ozz.geometry.MeshPart, 1);
+            parts[0] = part;
+            var value: ozz.geometry.Mesh = .{
+                .allocator = allocator,
+                .parts = parts,
+                .triangle_indices = try allocator.alloc(u16, 0),
+                .joint_remaps = try allocator.alloc(u16, 0),
+                .inverse_bind_poses = try allocator.alloc(ozz.math.Float4x4, 0),
+            };
+            defer value.deinit();
+            try ozz.io.writeMesh(allocator, writer, value);
+        },
+    }
+    return bytes.len;
+}
+
+fn migrateTrack(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    writer: *std.Io.Writer,
+) !usize {
+    var consumed: usize = 0;
+    var value = try ozz.legacy.readTrackPrefix(T, allocator, bytes, .{}, &consumed);
+    defer value.deinit();
+    try ozz.io.writeTrack(T, allocator, writer, value);
+    return consumed;
+}
+
+fn migrateRawTrack(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+    writer: *std.Io.Writer,
+) !void {
+    var value = try ozz.legacy.readRawTrack(T, allocator, bytes, .{});
+    defer value.deinit();
+    try ozz.io.writeRawTrack(T, allocator, writer, value);
+}
+
+test "usage has the unified commands" {
+    try std.testing.expect(std.mem.indexOf(u8, usage, "inspect") != null);
+    try std.testing.expect(std.mem.indexOf(u8, usage, "migrate") != null);
+    try std.testing.expect(std.mem.indexOf(u8, usage, "import") != null);
+}

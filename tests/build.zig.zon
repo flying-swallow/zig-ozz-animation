@@ -1,0 +1,21 @@
+.{
+    .name = .zig_ozz_animation_conformance,
+    .version = "0.0.0",
+    .fingerprint = 0x6fbe93a30fef8da7,
+    .minimum_zig_version = "0.17.0-dev.1415+64dfaa568",
+    .dependencies = .{
+        .zig_ozz_animation = .{
+            .path = "..",
+        },
+        .ozz_animation_upstream = .{
+            .url = "git+https://github.com/guillaumeblanc/ozz-animation.git#6cbdc790123aa4731d82e255df187b3a8a808256",
+            .hash = "N-V-__8AALzdDQYWiXSN9v7KwFtPIDpb_OgQryHPPlXmKIyn",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "CONFORMANCE.md",
+    },
+}

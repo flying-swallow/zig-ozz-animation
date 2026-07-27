@@ -1,0 +1,25 @@
+zig-ozz-animation is a clean Zig port derived from the design and binary
+formats of ozz-animation 0.16:
+
+  https://github.com/guillaumeblanc/ozz-animation
+  Copyright (c) Guillaume Blanc
+  Licensed under the MIT License.
+
+The math facade uses Caliper:
+
+  https://github.com/flying-swallow/caliper
+  Copyright (c) its contributors
+  Licensed under the MIT License.
+
+The glTF importer uses flying-swallow/cglf, a Zig package wrapping cgltf:
+
+  https://github.com/flying-swallow/cglf
+  Wrapper licensed under GPL-2.0-only; vendored cgltf licensed under MIT.
+
+The optional desktop sample direction follows rhi-zig:
+
+  https://github.com/flying-swallow/rhi-zig
+  Copyright (c) Michael Pollind
+  Licensed under GPL-2.0-only.
+
+No rhi-zig code is linked into the MIT-licensed core or command-line tool.
