@@ -547,6 +547,89 @@ test "StartJointCorrection/IKTwoBoneJob" {
     try std.testing.expect(math.Quaternion.dot(.identity, result.start_correction) < 0.999);
 }
 
+fn bentIkOptions(target: math.Float3) animation.TwoBoneOptions {
+    return .{
+        .target = target,
+        .start_joint = .identity,
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .y_axis }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1, .y = 1 } }),
+        .mid_axis = .z_axis,
+        .pole_vector = .y_axis,
+    };
+}
+
+test "MidAxisAndZeroTarget/IKTwoBoneJob" {
+    const unchanged = try animation.twoBoneIk(bentIkOptions(.{ .x = 1, .y = 1 }));
+    try h.expectQuaternion(.identity, unchanged.start_correction);
+    try h.expectQuaternion(.identity, unchanged.mid_correction);
+    try std.testing.expect(unchanged.reached);
+
+    var reversed_options = bentIkOptions(.{ .x = 1, .y = 1 });
+    reversed_options.mid_axis = .{ .z = -1 };
+    const reversed = try animation.twoBoneIk(reversed_options);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.y_axis, @as(f32, std.math.pi)),
+        reversed.start_correction,
+    );
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi)),
+        reversed.mid_correction,
+    );
+
+    const folded = try animation.twoBoneIk(bentIkOptions(.zero));
+    try h.expectQuaternion(.identity, folded.start_correction);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, -@as(f32, std.math.pi) / 2),
+        folded.mid_correction,
+    );
+    try std.testing.expect(!folded.reached);
+}
+
+test "SoftenReachability/IKTwoBoneJob" {
+    var options = bentIkOptions(.{ .x = 1 });
+    options.soften = 0.5;
+    try std.testing.expect((try animation.twoBoneIk(options)).reached);
+    options.target = .{ .x = 1.2 };
+    try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
+    options.target = .{ .x = 3 };
+    options.soften = 1;
+    try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
+}
+
+test "TwistAndZeroScale/IKTwoBoneJob" {
+    var twist_options = bentIkOptions(.{ .x = 1, .y = 1 });
+    twist_options.twist_angle = @as(f32, std.math.pi) / 2;
+    const twisted = try animation.twoBoneIk(twist_options);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(
+            math.Float3.normalize(.{ .x = 1, .y = 1 }),
+            @as(f32, std.math.pi) / 2,
+        ),
+        twisted.start_correction,
+    );
+    try h.expectQuaternion(.identity, twisted.mid_correction);
+
+    const zero = math.Float4x4.fromTransform(.{ .scale = .zero });
+    const degenerate = try animation.twoBoneIk(.{
+        .target = .x_axis,
+        .start_joint = zero,
+        .mid_joint = zero,
+        .end_joint = zero,
+    });
+    try h.expectQuaternion(.identity, degenerate.start_correction);
+    try h.expectQuaternion(.identity, degenerate.mid_correction);
+    try std.testing.expect(!degenerate.reached);
+}
+
+test "ZeroScale/IKAimJob" {
+    const result = try animation.aimIk(.{
+        .target = .x_axis,
+        .joint = math.Float4x4.fromTransform(.{ .scale = .zero }),
+    });
+    try h.expectQuaternion(.identity, result.correction);
+    try std.testing.expect(!result.reached);
+}
+
 test "JointRestPose/SkeletonUtils" {
     var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
         .{
@@ -557,4 +640,69 @@ test "JointRestPose/SkeletonUtils" {
     });
     defer skeleton.deinit();
     try h.expectFloat3(.{ .x = 4, .y = 5, .z = 6 }, skeleton.jointRestPose(0).translation);
+}
+
+fn expectEdges(
+    track: *const animation.FloatTrack,
+    from: f32,
+    to: f32,
+    threshold: f32,
+    expected: []const animation.TrackEdge,
+) !void {
+    var iterator = animation.TrackEdgeIterator.init(track, from, to, threshold);
+    for (expected) |edge| {
+        const actual = iterator.next() orelse return error.MissingEdge;
+        try h.expectFloat(edge.ratio, actual.ratio);
+        try std.testing.expectEqual(edge.rising, actual.rising);
+    }
+    try std.testing.expectEqual(@as(?animation.TrackEdge, null), iterator.next());
+}
+
+test "LoopReverseAndBoundary/TrackEdgeTriggerJob" {
+    var track = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.5, .value = 2, .interpolation = .step },
+        .{ .ratio = 1, .value = 0, .interpolation = .step },
+    });
+    defer track.deinit();
+
+    try expectEdges(&track, 0, 3, 1, &.{
+        .{ .ratio = 0.5, .rising = true },
+        .{ .ratio = 1, .rising = false },
+        .{ .ratio = 1.5, .rising = true },
+        .{ .ratio = 2, .rising = false },
+        .{ .ratio = 2.5, .rising = true },
+        .{ .ratio = 3, .rising = false },
+    });
+    try expectEdges(&track, 3, 0, 1, &.{
+        .{ .ratio = 3, .rising = true },
+        .{ .ratio = 2.5, .rising = false },
+        .{ .ratio = 2, .rising = true },
+        .{ .ratio = 1.5, .rising = false },
+        .{ .ratio = 1, .rising = true },
+        .{ .ratio = 0.5, .rising = false },
+    });
+    try expectEdges(&track, -1, 1, 1, &.{
+        .{ .ratio = -0.5, .rising = true },
+        .{ .ratio = 0, .rising = false },
+        .{ .ratio = 0.5, .rising = true },
+        .{ .ratio = 1, .rising = false },
+    });
+    try expectEdges(&track, 0, 0.5, 1, &.{});
+    try expectEdges(&track, 0, std.math.nextAfter(f32, 0.5, 1), 1, &.{
+        .{ .ratio = 0.5, .rising = true },
+    });
+}
+
+test "MixedInterpolation/TrackEdgeTriggerJob" {
+    var track = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.5, .value = 2, .interpolation = .linear },
+        .{ .ratio = 1, .value = 0, .interpolation = .linear },
+    });
+    defer track.deinit();
+    try expectEdges(&track, 0, 1, 1, &.{
+        .{ .ratio = 0.5, .rising = true },
+        .{ .ratio = 0.75, .rising = false },
+    });
 }

@@ -104,7 +104,7 @@ pub fn skin(options: SkinningOptions) !void {
         }
     }
     if (options.input_tangents) |tangents| {
-        if (tangents.len < vertex_count or options.output_tangents == null or
+        if (options.input_normals == null or tangents.len < vertex_count or options.output_tangents == null or
             options.output_tangents.?.len < vertex_count)
         {
             return SkinningError.BufferTooSmall;
@@ -147,7 +147,11 @@ pub fn skin(options: SkinningOptions) !void {
                 out_normal = math.Float3.add(out_normal, math.Float3.scale(transformed, weight));
             }
             if (options.input_tangents) |tangents| {
-                const transformed = math.Float4x4.transformVector(matrix, tangents[vertex]);
+                const tangent_matrix = if (options.joint_inverse_transpose_matrices) |matrices|
+                    matrices[joint]
+                else
+                    matrix;
+                const transformed = math.Float4x4.transformVector(tangent_matrix, tangents[vertex]);
                 out_tangent = math.Float3.add(out_tangent, math.Float3.scale(transformed, weight));
             }
             previous_weight += weight;
@@ -231,7 +235,7 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
         }
     }
     if (options.input_tangents) |input| {
-        if (options.input_tangents_stride < @sizeOf(math.Float3) or
+        if (options.input_normals == null or options.input_tangents_stride < @sizeOf(math.Float3) or
             options.output_tangents == null or
             options.output_tangents_stride < @sizeOf(math.Float3) or
             input.len < try requiredBytes(options.vertex_count, options.input_tangents_stride, @sizeOf(math.Float3)) or
@@ -290,9 +294,13 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
                 );
             }
             if (options.input_tangents != null) {
+                const tangent_matrix = if (options.joint_inverse_transpose_matrices) |matrices|
+                    matrices[joint]
+                else
+                    matrix;
                 output_tangent = math.Float3.add(
                     output_tangent,
-                    math.Float3.scale(math.Float4x4.transformVector(matrix, input_tangent), weight),
+                    math.Float3.scale(math.Float4x4.transformVector(tangent_matrix, input_tangent), weight),
                 );
             }
         }

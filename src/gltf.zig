@@ -230,11 +230,125 @@ fn animationName(allocator: std.mem.Allocator, value: [*c]const c.cgltf_animatio
     return std.fmt.allocPrint(allocator, "animation_{d}", .{index});
 }
 
-fn samplerKeyIndex(sampler: [*c]const c.cgltf_animation_sampler, key: usize) usize {
-    return if (sampler.*.interpolation == c.cgltf_interpolation_type_cubic_spline)
-        key * 3 + 1
-    else
-        key;
+pub const AnimationImportOptions = struct {
+    /// glTF has no scene frame rate. Upstream Ozz uses 30 Hz when automatic
+    /// sampling is requested, so non-positive values select 30 Hz here too.
+    sampling_rate: f32 = 0,
+};
+
+fn readChannelValue(comptime T: type, accessor: [*c]const c.cgltf_accessor, index: usize) !T {
+    if (T == math.Float3) {
+        var value: [3]f32 = undefined;
+        try readAccessor(accessor, index, &value);
+        return .{ .x = value[0], .y = value[1], .z = value[2] };
+    }
+    if (T == math.Quaternion) {
+        var value: [4]f32 = undefined;
+        try readAccessor(accessor, index, &value);
+        return .{ .x = value[0], .y = value[1], .z = value[2], .w = value[3] };
+    }
+    @compileError("unsupported glTF animation channel type");
+}
+
+fn addValue(comptime T: type, a: T, b: T) T {
+    if (T == math.Float3) return math.Float3.add(a, b);
+    if (T == math.Quaternion) return .{
+        .x = a.x + b.x,
+        .y = a.y + b.y,
+        .z = a.z + b.z,
+        .w = a.w + b.w,
+    };
+    @compileError("unsupported glTF animation channel type");
+}
+
+fn scaleValue(comptime T: type, value: T, scale: f32) T {
+    if (T == math.Float3) return math.Float3.scale(value, scale);
+    if (T == math.Quaternion) return .{
+        .x = value.x * scale,
+        .y = value.y * scale,
+        .z = value.z * scale,
+        .w = value.w * scale,
+    };
+    @compileError("unsupported glTF animation channel type");
+}
+
+fn hermiteValue(comptime T: type, alpha: f32, p0: T, m0: T, p1: T, m1: T) T {
+    const t2 = alpha * alpha;
+    const t3 = t2 * alpha;
+    return addValue(T, addValue(T, scaleValue(T, p0, 2 * t3 - 3 * t2 + 1), scaleValue(T, m0, t3 - 2 * t2 + alpha)), addValue(T, scaleValue(T, p1, -2 * t3 + 3 * t2), scaleValue(T, m1, t3 - t2)));
+}
+
+fn sampleChannel(
+    comptime T: type,
+    comptime Key: type,
+    allocator: std.mem.Allocator,
+    sampler: [*c]const c.cgltf_animation_sampler,
+    sampling_rate: f32,
+) ![]Key {
+    const input = sampler.*.input orelse return Error.InvalidAnimation;
+    const output = sampler.*.output orelse return Error.InvalidAnimation;
+    const count = input.*.count;
+    if (count == 0) return allocator.alloc(Key, 0);
+
+    const timestamps = try allocator.alloc(f32, count);
+    defer allocator.free(timestamps);
+    for (timestamps, 0..) |*time, i| {
+        var value: [1]f32 = undefined;
+        try readAccessor(input, i, &value);
+        time.* = value[0];
+    }
+
+    switch (sampler.*.interpolation) {
+        c.cgltf_interpolation_type_linear => {
+            if (output.*.count != count) return Error.InvalidAnimation;
+            const keys = try allocator.alloc(Key, count);
+            for (keys, 0..) |*key, i| key.* = .{
+                .time = timestamps[i],
+                .value = try readChannelValue(T, output, i),
+            };
+            return keys;
+        },
+        c.cgltf_interpolation_type_step => {
+            if (output.*.count != count) return Error.InvalidAnimation;
+            const keys = try allocator.alloc(Key, count * 2 - 1);
+            for (0..count) |i| {
+                const value = try readChannelValue(T, output, i);
+                keys[i * 2] = .{ .time = timestamps[i], .value = value };
+                if (i + 1 < count) {
+                    keys[i * 2 + 1] = .{
+                        .time = std.math.nextAfter(f32, timestamps[i + 1], 0),
+                        .value = value,
+                    };
+                }
+            }
+            return keys;
+        },
+        c.cgltf_interpolation_type_cubic_spline => {
+            if (count < 2 or output.*.count != count * 3) return Error.InvalidAnimation;
+            const start = timestamps[0];
+            const span = timestamps[count - 1] - start;
+            const fixed = offline.FixedRateSamplingTime.init(span, sampling_rate) catch
+                return Error.InvalidAnimation;
+            const keys = try allocator.alloc(Key, fixed.numKeys());
+            var left: usize = 0;
+            for (keys, 0..) |*key, i| {
+                const time = fixed.time(i) + start;
+                while (left + 2 < count and timestamps[left + 1] < time) left += 1;
+                const t0 = timestamps[left];
+                const t1 = timestamps[left + 1];
+                if (!(t1 > t0)) return Error.InvalidAnimation;
+                const alpha = (time - t0) / (t1 - t0);
+                const interval = t1 - t0;
+                const p0 = try readChannelValue(T, output, left * 3 + 1);
+                const m0 = scaleValue(T, try readChannelValue(T, output, left * 3 + 2), interval);
+                const p1 = try readChannelValue(T, output, (left + 1) * 3 + 1);
+                const m1 = scaleValue(T, try readChannelValue(T, output, (left + 1) * 3), interval);
+                key.* = .{ .time = time, .value = hermiteValue(T, alpha, p0, m0, p1, m1) };
+            }
+            return keys;
+        },
+        else => return Error.InvalidAnimation,
+    }
 }
 
 /// Imports all glTF animation clips from a file. Unlike `importSkeleton`, this
@@ -244,6 +358,17 @@ pub fn importAnimationsFile(
     source_path: []const u8,
     skeleton: @import("animation.zig").Skeleton,
 ) ![]offline.RawAnimation {
+    return importAnimationsFileWithOptions(allocator, source_path, skeleton, .{});
+}
+
+pub fn importAnimationsFileWithOptions(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+    skeleton: @import("animation.zig").Skeleton,
+    options: AnimationImportOptions,
+) ![]offline.RawAnimation {
+    const sampling_rate = if (options.sampling_rate > 0) options.sampling_rate else 30;
+    if (!std.math.isFinite(sampling_rate)) return Error.InvalidAnimation;
     const parsed = try ParsedFile.init(allocator, source_path);
     defer parsed.deinit();
     const data = parsed.data;
@@ -283,59 +408,59 @@ pub fn importAnimationsFile(
             if (channel.sampler == null or channel.target_node == null) continue;
             const joint = try channelJoint(allocator, data, skeleton, channel.target_node) orelse continue;
             const sampler = channel.sampler;
-            const count = sampler.*.input.*.count;
             switch (channel.target_path) {
                 c.cgltf_animation_path_type_translation => {
                     if (clip.tracks[joint].translations.len != 0) return Error.InvalidAnimation;
-                    const keys = try allocator.alloc(offline.TranslationKey, count);
-                    clip.tracks[joint].translations = keys;
-                    for (keys, 0..) |*key, i| {
-                        var time: [1]f32 = undefined;
-                        var value: [3]f32 = undefined;
-                        try readAccessor(sampler.*.input, i, &time);
-                        try readAccessor(sampler.*.output, samplerKeyIndex(sampler, i), &value);
-                        key.* = .{
-                            .time = time[0],
-                            .value = .{ .x = value[0], .y = value[1], .z = value[2] },
-                        };
-                    }
+                    clip.tracks[joint].translations = try sampleChannel(
+                        math.Float3,
+                        offline.TranslationKey,
+                        allocator,
+                        sampler,
+                        sampling_rate,
+                    );
                 },
                 c.cgltf_animation_path_type_rotation => {
                     if (clip.tracks[joint].rotations.len != 0) return Error.InvalidAnimation;
-                    const keys = try allocator.alloc(offline.RotationKey, count);
-                    clip.tracks[joint].rotations = keys;
-                    for (keys, 0..) |*key, i| {
-                        var time: [1]f32 = undefined;
-                        var value: [4]f32 = undefined;
-                        try readAccessor(sampler.*.input, i, &time);
-                        try readAccessor(sampler.*.output, samplerKeyIndex(sampler, i), &value);
-                        key.* = .{
-                            .time = time[0],
-                            .value = math.Quaternion.normalize(.{
-                                .x = value[0],
-                                .y = value[1],
-                                .z = value[2],
-                                .w = value[3],
-                            }),
-                        };
+                    clip.tracks[joint].rotations = try sampleChannel(
+                        math.Quaternion,
+                        offline.RotationKey,
+                        allocator,
+                        sampler,
+                        sampling_rate,
+                    );
+                    for (clip.tracks[joint].rotations) |*key| {
+                        key.value = math.Quaternion.normalize(key.value);
                     }
                 },
                 c.cgltf_animation_path_type_scale => {
                     if (clip.tracks[joint].scales.len != 0) return Error.InvalidAnimation;
-                    const keys = try allocator.alloc(offline.ScaleKey, count);
-                    clip.tracks[joint].scales = keys;
-                    for (keys, 0..) |*key, i| {
-                        var time: [1]f32 = undefined;
-                        var value: [3]f32 = undefined;
-                        try readAccessor(sampler.*.input, i, &time);
-                        try readAccessor(sampler.*.output, samplerKeyIndex(sampler, i), &value);
-                        key.* = .{
-                            .time = time[0],
-                            .value = .{ .x = value[0], .y = value[1], .z = value[2] },
-                        };
-                    }
+                    clip.tracks[joint].scales = try sampleChannel(
+                        math.Float3,
+                        offline.ScaleKey,
+                        allocator,
+                        sampler,
+                        sampling_rate,
+                    );
                 },
                 else => {},
+            }
+        }
+        for (clip.tracks, 0..) |*track, joint| {
+            const rest = skeleton.jointRestPose(joint);
+            if (track.translations.len == 0) {
+                track.translations = try allocator.dupe(offline.TranslationKey, &.{
+                    .{ .time = 0, .value = rest.translation },
+                });
+            }
+            if (track.rotations.len == 0) {
+                track.rotations = try allocator.dupe(offline.RotationKey, &.{
+                    .{ .time = 0, .value = rest.rotation },
+                });
+            }
+            if (track.scales.len == 0) {
+                track.scales = try allocator.dupe(offline.ScaleKey, &.{
+                    .{ .time = 0, .value = rest.scale },
+                });
             }
         }
         if (!clip.validate()) return Error.InvalidAnimation;

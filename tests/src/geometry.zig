@@ -52,6 +52,7 @@ test "RunInverseTranspose/SkinningJob" {
     } };
     var positions: [1]math.Float3 = undefined;
     var normals: [1]math.Float3 = undefined;
+    var tangents: [1]math.Float3 = undefined;
     try geometry.skin(.{
         .joint_matrices = &.{matrix},
         .joint_inverse_transpose_matrices = &.{inverse_transpose},
@@ -59,12 +60,30 @@ test "RunInverseTranspose/SkinningJob" {
         .joint_weights = &.{},
         .input_positions = &.{.one},
         .input_normals = &.{.x_axis},
+        .input_tangents = &.{.x_axis},
         .output_positions = &positions,
         .output_normals = &normals,
+        .output_tangents = &tangents,
         .influences_count = 1,
     });
     try h.expectFloat3(.{ .x = 2, .y = 3, .z = 4 }, positions[0]);
     try h.expectFloat3(.{ .x = 0.5 }, normals[0]);
+    try h.expectFloat3(.{ .x = 0.5 }, tangents[0]);
+}
+
+test "TangentsRequireNormals/SkinningJob" {
+    var positions: [1]math.Float3 = undefined;
+    var tangents: [1]math.Float3 = undefined;
+    try std.testing.expectError(geometry.SkinningError.BufferTooSmall, geometry.skin(.{
+        .joint_matrices = &.{math.Float4x4.identity},
+        .joint_indices = &.{0},
+        .joint_weights = &.{},
+        .input_positions = &.{.zero},
+        .input_tangents = &.{.x_axis},
+        .output_positions = &positions,
+        .output_tangents = &tangents,
+        .influences_count = 1,
+    }));
 }
 
 test "RunStrided/SkinningJob" {

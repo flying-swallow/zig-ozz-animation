@@ -78,10 +78,92 @@ test "gltf2ozz_animation_multiple" {
     try importFixtureAnimations("media/gltf/khronos/interpolation_test.gltf");
 }
 
+test "gltf2ozz preserves step, samples cubic, and pads rest pose channels" {
+    const allocator = std.testing.allocator;
+    const path = try h.fixturePath(allocator, "media/gltf/khronos/interpolation_test.gltf");
+    defer allocator.free(path);
+    const bytes = try readFixture(allocator, "media/gltf/khronos/interpolation_test.gltf");
+    defer allocator.free(bytes);
+    var raw_skeleton = try ozz.gltf.importSkeleton(allocator, bytes, 0);
+    defer raw_skeleton.deinit();
+    var skeleton = try ozz.offline.SkeletonBuilder.build(allocator, raw_skeleton);
+    defer skeleton.deinit();
+
+    const animations = try ozz.gltf.importAnimationsFileWithOptions(
+        allocator,
+        path,
+        skeleton,
+        .{ .sampling_rate = 30 },
+    );
+    defer ozz.gltf.deinitAnimations(allocator, animations);
+    try std.testing.expectEqual(@as(usize, 9), animations.len);
+
+    const step_joint = ozz.animation.findJoint(skeleton, "Cube").?;
+    const cubic_joint = ozz.animation.findJoint(skeleton, "Cube.008").?;
+    const linear_joint = ozz.animation.findJoint(skeleton, "Cube.009").?;
+    var step_clip: ?*const ozz.offline.RawAnimation = null;
+    var cubic_clip: ?*const ozz.offline.RawAnimation = null;
+    var linear_clip: ?*const ozz.offline.RawAnimation = null;
+    for (animations) |*clip| {
+        if (std.mem.eql(u8, clip.name, "Step Scale")) step_clip = clip;
+        if (std.mem.eql(u8, clip.name, "CubicSpline Translation")) cubic_clip = clip;
+        if (std.mem.eql(u8, clip.name, "Linear Translation")) linear_clip = clip;
+    }
+
+    const step_keys = step_clip.?.tracks[step_joint].scales;
+    try std.testing.expectEqual(@as(usize, 9), step_keys.len);
+    try h.expectFloat3(step_keys[0].value, step_keys[1].value);
+    try std.testing.expect(step_keys[1].time < step_keys[2].time);
+    try std.testing.expectEqual(
+        std.math.nextAfter(f32, step_keys[2].time, 0),
+        step_keys[1].time,
+    );
+
+    // ceil(1.6666667 * 30) + the final duration key.
+    try std.testing.expectEqual(@as(usize, 51), cubic_clip.?.tracks[cubic_joint].translations.len);
+    try std.testing.expectEqual(@as(usize, 5), linear_clip.?.tracks[linear_joint].translations.len);
+
+    const unrelated_joint = ozz.animation.findJoint(skeleton, "Cube.001").?;
+    const padded = step_clip.?.tracks[unrelated_joint];
+    try std.testing.expectEqual(@as(usize, 1), padded.translations.len);
+    try std.testing.expectEqual(@as(usize, 1), padded.rotations.len);
+    try std.testing.expectEqual(@as(usize, 1), padded.scales.len);
+    try h.expectTransform(skeleton.jointRestPose(unrelated_joint), .{
+        .translation = padded.translations[0].value,
+        .rotation = padded.rotations[0].value,
+        .scale = padded.scales[0].value,
+    });
+}
+
 test "gltf2ozz_box_animation" {
     try importFixtureAnimations("media/gltf/khronos/box_animated.gltf");
 }
 
 test "gltf2ozz_cesium_animation" {
     try importFixtureAnimations("media/gltf/khronos/cesium_man.gltf");
+}
+
+test "gltf2ozz_rigged_simple_animation" {
+    try importFixtureAnimations("media/gltf/khronos/rigged_simple.gltf");
+}
+
+test "gltf2ozz_ruby_animation" {
+    try importFixtureAnimations("media/gltf/sketchfab/ruby/scene.gltf");
+}
+
+test "gltf2ozz_triangle_has_no_animation" {
+    const allocator = std.testing.allocator;
+    const relative = "media/gltf/khronos/triangle.gltf";
+    const path = try h.fixturePath(allocator, relative);
+    defer allocator.free(path);
+    const bytes = try readFixture(allocator, relative);
+    defer allocator.free(bytes);
+    var raw = try ozz.gltf.importSkeleton(allocator, bytes, 0);
+    defer raw.deinit();
+    var skeleton = try ozz.offline.SkeletonBuilder.build(allocator, raw);
+    defer skeleton.deinit();
+    try std.testing.expectError(
+        ozz.gltf.Error.MissingAnimation,
+        ozz.gltf.importAnimationsFile(allocator, path, skeleton),
+    );
 }

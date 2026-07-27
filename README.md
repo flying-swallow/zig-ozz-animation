@@ -12,7 +12,8 @@ The repository currently provides:
   sampling, blending, local-to-model, motion blending, aim IK, two-bone IK,
   triggering, and CPU skinning;
 - raw skeletons/animations/tracks, builders, additive animation generation,
-  optimization, sampling, and time-point extraction;
+  hierarchy-aware optimization with per-joint overrides, sampling, and
+  time-point extraction;
 - bounded, versioned, little-endian `.zozz` serialization;
 - a pure-Zig converter for every tagged Ozz 0.16 archive type, in big- or
   little-endian form, including concatenated motion tracks and mesh streams;
@@ -44,6 +45,7 @@ The installed command is `zig-out/bin/ozz`.
 ozz inspect walk.ozz
 ozz migrate walk.ozz walk.zozz
 ozz import character.glb --output generated
+ozz import character.glb --output generated --sampling-rate 60
 ozz config print
 ```
 
@@ -56,7 +58,9 @@ guessed.
 animation archives for every clip in the source. Skeleton-only conversion can
 remain filesystem-independent by passing source bytes to `importSkeleton`;
 `importAnimationsFile` accepts a path so cglf can resolve external `.bin`
-buffers.
+buffers. STEP channels retain their discontinuities and CUBICSPLINE channels
+are Hermite-sampled at 30 Hz by default, matching upstream Ozz; pass
+`--sampling-rate` or use `importAnimationsFileWithOptions` to override it.
 
 ## Native archive
 

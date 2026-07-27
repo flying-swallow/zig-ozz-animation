@@ -6,7 +6,7 @@ const usage =
     \\usage:
     \\  ozz inspect <archive>
     \\  ozz migrate <legacy.ozz> <native.zozz>
-    \\  ozz import <source.gltf|source.glb> --output <directory>
+    \\  ozz import <source.gltf|source.glb> --output <directory> [--sampling-rate <hz>]
     \\  ozz config print
     \\
 ;
@@ -42,10 +42,22 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     if (std.mem.eql(u8, args[1], "import")) {
-        if (args.len != 5 or !std.mem.eql(u8, args[3], "--output")) {
-            return fail("import expects <source.gltf|source.glb> --output <directory>", .{});
+        if ((args.len != 5 and args.len != 7) or !std.mem.eql(u8, args[3], "--output") or
+            (args.len == 7 and !std.mem.eql(u8, args[5], "--sampling-rate")))
+        {
+            return fail(
+                "import expects <source.gltf|source.glb> --output <directory> [--sampling-rate <hz>]",
+                .{},
+            );
         }
-        return importGltf(init.io, allocator, stdout, args[2], args[4]);
+        const sampling_rate = if (args.len == 7)
+            std.fmt.parseFloat(f32, args[6]) catch return fail("invalid sampling rate '{s}'", .{args[6]})
+        else
+            0;
+        if (!std.math.isFinite(sampling_rate) or sampling_rate < 0) {
+            return fail("sampling rate must be finite and non-negative", .{});
+        }
+        return importGltf(init.io, allocator, stdout, args[2], args[4], sampling_rate);
     }
     return fail("unknown command '{s}'\n\n{s}", .{ args[1], usage });
 }
@@ -56,6 +68,7 @@ fn importGltf(
     status: *std.Io.Writer,
     input_path: []const u8,
     output_dir: []const u8,
+    sampling_rate: f32,
 ) !void {
     const bytes = try readInput(io, allocator, input_path);
     var raw = try ozz.gltf.importSkeleton(allocator, bytes, 0);
@@ -78,7 +91,12 @@ fn importGltf(
     try cwd.writeFile(io, .{ .sub_path = skeleton_path, .data = runtime_output.writer.buffered() });
 
     var animation_count: usize = 0;
-    const animations_result = ozz.gltf.importAnimationsFile(allocator, input_path, skeleton);
+    const animations_result = ozz.gltf.importAnimationsFileWithOptions(
+        allocator,
+        input_path,
+        skeleton,
+        .{ .sampling_rate = sampling_rate },
+    );
     if (animations_result) |animations| {
         defer ozz.gltf.deinitAnimations(allocator, animations);
         for (animations, 0..) |raw_animation, index| {

@@ -5,5 +5,6 @@ test {
     _ = @import("geometry.zig");
     _ = @import("archive.zig");
     _ = @import("gltf.zig");
+    _ = @import("media.zig");
     _ = @import("coverage.zig");
 }

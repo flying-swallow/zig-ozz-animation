@@ -720,59 +720,96 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     }
     const weight = std.math.clamp(options.weight, 0, 1);
     if (weight == 0) return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
-    const start = math.Float4x4.translation(options.start_joint);
-    const mid = math.Float4x4.translation(options.mid_joint);
-    const end = math.Float4x4.translation(options.end_joint);
-    const first = math.Float3.sub(mid, start);
-    const second = math.Float3.sub(end, mid);
-    const l1 = math.Float3.length(first);
-    const l2 = math.Float3.length(second);
-    if (l1 <= math.epsilon or l2 <= math.epsilon) {
+
+    const inv_start = math.Float4x4.inverse(options.start_joint) orelse
+        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+    const inv_mid = math.Float4x4.inverse(options.mid_joint) orelse
+        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+
+    const start_position = math.Float4x4.translation(options.start_joint);
+    const mid_position = math.Float4x4.translation(options.mid_joint);
+    const end_position = math.Float4x4.translation(options.end_joint);
+    const start_mid_ms = math.Float3.scale(math.Float4x4.transformPoint(inv_mid, start_position), -1);
+    const mid_end_ms = math.Float4x4.transformPoint(inv_mid, end_position);
+    const start_mid_ss = math.Float4x4.transformPoint(inv_start, mid_position);
+    const end_ss = math.Float4x4.transformPoint(inv_start, end_position);
+    const mid_end_ss = math.Float3.sub(end_ss, start_mid_ss);
+    const l1_sq = math.Float3.lengthSquared(start_mid_ss);
+    const l2_sq = math.Float3.lengthSquared(mid_end_ss);
+    if (l1_sq <= math.epsilon or l2_sq <= math.epsilon) {
         return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
     }
-    const start_target = math.Float3.sub(options.target, start);
-    const original_distance = math.Float3.length(start_target);
-    if (original_distance <= math.epsilon) {
-        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+
+    const l1 = @sqrt(l1_sq);
+    const l2 = @sqrt(l2_sq);
+    const chain_length = l1 + l2;
+    const minimum_length = @abs(l1 - l2);
+    const soften_distance = chain_length * std.math.clamp(options.soften, 0, 1);
+    const soften_range = chain_length - soften_distance;
+    const original_target_ss = math.Float4x4.transformPoint(inv_start, options.target);
+    const original_target_length = math.Float3.length(original_target_ss);
+    var target_ss = original_target_ss;
+    var target_length = original_target_length;
+    if (original_target_length > soften_distance and original_target_length > 0 and soften_range > 0) {
+        const alpha = (original_target_length - soften_distance) / soften_range;
+        const ratio = 1 - 81 / std.math.pow(f32, alpha + 3, 4);
+        target_length = soften_distance + soften_range * ratio;
+        target_ss = math.Float3.scale(original_target_ss, target_length / original_target_length);
     }
-    const min_distance = @abs(l1 - l2);
-    const max_distance = l1 + l2;
-    const soften_start = max_distance * std.math.clamp(options.soften, 0, 1);
-    var distance = original_distance;
-    if (distance > soften_start and soften_start < max_distance) {
-        const range = max_distance - soften_start;
-        const alpha = (distance - soften_start) / range;
-        const softened = 1 - 81 / std.math.pow(f32, alpha + 3, 4);
-        distance = soften_start + range * softened;
-    }
-    distance = std.math.clamp(distance, min_distance + math.epsilon, max_distance - math.epsilon);
-    const direction = math.Float3.normalize(start_target);
-    var pole = math.Float3.sub(options.pole_vector, math.Float3.scale(direction, math.Float3.dot(options.pole_vector, direction)));
-    if (math.Float3.lengthSquared(pole) <= math.epsilon) {
-        pole = math.Float3.cross(direction, math.Float3.normalize(first));
-    }
-    var bend = math.Float3.normalize(pole);
-    if (options.twist_angle != 0) {
-        bend = math.Quaternion.rotate(math.Quaternion.fromAxisAngle(direction, options.twist_angle), bend);
-    }
-    const along = (distance * distance + l1 * l1 - l2 * l2) / (2 * distance);
-    const height = @sqrt(@max(l1 * l1 - along * along, 0));
-    const desired_mid = math.Float3.add(start, math.Float3.add(
-        math.Float3.scale(direction, along),
-        math.Float3.scale(bend, height),
-    ));
-    const desired_first = math.Float3.sub(desired_mid, start);
-    const start_full = math.Quaternion.fromTo(first, desired_first);
-    const rotated_second = math.Quaternion.rotate(start_full, second);
-    const desired_second = math.Float3.sub(
-        math.Float3.add(start, math.Float3.scale(direction, distance)),
-        desired_mid,
+    const reached = original_target_length <= soften_distance and original_target_length > minimum_length and weight >= 1;
+
+    const corrected_cos = std.math.clamp(
+        (l1_sq + l2_sq - target_length * target_length) / (2 * l1 * l2),
+        -1,
+        1,
     );
-    const mid_full = math.Quaternion.fromTo(rotated_second, desired_second);
+    const initial_cos = std.math.clamp(
+        (l1_sq + l2_sq - math.Float3.lengthSquared(end_ss)) / (2 * l1 * l2),
+        -1,
+        1,
+    );
+    const bent_reference = math.Float3.cross(start_mid_ms, options.mid_axis);
+    const initial_sign: f32 = if (math.Float3.dot(bent_reference, mid_end_ms) < 0) -1 else 1;
+    const initial_angle = std.math.acos(initial_cos) * initial_sign;
+    const mid_full = math.Quaternion.fromAxisAngle(
+        options.mid_axis,
+        std.math.acos(corrected_cos) - initial_angle,
+    );
+
+    const rotated_mid_end_ms = math.Quaternion.rotate(mid_full, mid_end_ms);
+    const rotated_mid_end_model = math.Float4x4.transformVector(options.mid_joint, rotated_mid_end_ms);
+    const rotated_mid_end_ss = math.Float4x4.transformVector(inv_start, rotated_mid_end_model);
+    const solved_end_ss = math.Float3.add(start_mid_ss, rotated_mid_end_ss);
+    const end_to_target = math.Quaternion.fromTo(solved_end_ss, target_ss);
+    var start_full = end_to_target;
+
+    if (math.Float3.lengthSquared(target_ss) > math.epsilon) {
+        const pole_ss = math.Float4x4.transformVector(inv_start, options.pole_vector);
+        const reference_normal = math.Float3.cross(target_ss, pole_ss);
+        const mid_axis_model = math.Float4x4.transformVector(options.mid_joint, options.mid_axis);
+        const mid_axis_ss = math.Float4x4.transformVector(inv_start, mid_axis_model);
+        const joint_normal = math.Quaternion.rotate(end_to_target, mid_axis_ss);
+        if (math.Float3.lengthSquared(reference_normal) > math.epsilon and
+            math.Float3.lengthSquared(joint_normal) > math.epsilon)
+        {
+            const reference_unit = math.Float3.normalize(reference_normal);
+            const joint_unit = math.Float3.normalize(joint_normal);
+            const cosine = std.math.clamp(math.Float3.dot(reference_unit, joint_unit), -1, 1);
+            var axis = math.Float3.normalize(target_ss);
+            if (math.Float3.dot(joint_normal, pole_ss) < 0) axis = math.Float3.scale(axis, -1);
+            const plane = math.Quaternion.fromAxisAngle(axis, std.math.acos(cosine));
+            start_full = math.Quaternion.mul(plane, end_to_target);
+        }
+        if (options.twist_angle != 0) {
+            const twist = math.Quaternion.fromAxisAngle(math.Float3.normalize(target_ss), options.twist_angle);
+            start_full = math.Quaternion.mul(twist, start_full);
+        }
+    }
+
     return .{
-        .start_correction = math.Quaternion.nlerp(.identity, start_full, weight),
+        .start_correction = math.Quaternion.nlerp(.identity, math.Quaternion.normalize(start_full), weight),
         .mid_correction = math.Quaternion.nlerp(.identity, mid_full, weight),
-        .reached = original_distance >= min_distance and original_distance <= soften_start and weight >= 1,
+        .reached = reached,
     };
 }
 
@@ -822,9 +859,11 @@ pub const TrackEdgeIterator = struct {
                     a.ratio + (b.ratio - a.ratio) * ((self.threshold - a.value) / (b.value - a.value));
                 const global_ratio = @as(f32, @floatFromInt(self.loop)) + local_ratio;
                 const in_range = if (forward)
-                    global_ratio >= self.from and global_ratio < self.to
+                    global_ratio >= self.from and
+                        (global_ratio < self.to or self.to >= @as(f32, @floatFromInt(self.loop + 1)))
                 else
-                    global_ratio <= self.from and global_ratio >= self.to;
+                    global_ratio >= self.to and
+                        (global_ratio < self.from or self.from >= @as(f32, @floatFromInt(self.loop + 1)));
                 if (in_range) return .{
                     .ratio = global_ratio,
                     .rising = if (forward) rising_forward else !rising_forward,

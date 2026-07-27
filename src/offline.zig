@@ -592,6 +592,8 @@ fn decimateTimed(
     allocator: std.mem.Allocator,
     keys: []const Key,
     tolerance: f32,
+    distance_scale: f32,
+    comptime rotation_distance: bool,
 ) ![]Key {
     if (keys.len <= 2) return allocator.dupe(Key, keys);
     var output: std.ArrayList(Key) = .empty;
@@ -606,7 +608,12 @@ fn decimateTimed(
             for (keys[anchor + 1 .. candidate]) |middle| {
                 const alpha = (middle.time - keys[anchor].time) /
                     (keys[candidate].time - keys[anchor].time);
-                if (valueDistance(T, middle.value, lerpValue(T, keys[anchor].value, keys[candidate].value, alpha)) > tolerance) {
+                const interpolated = lerpValue(T, keys[anchor].value, keys[candidate].value, alpha);
+                const distance = if (rotation_distance) blk: {
+                    const dot = @abs(math.Quaternion.dot(middle.value, interpolated));
+                    break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
+                } else valueDistance(T, middle.value, interpolated) * distance_scale;
+                if (distance > tolerance) {
                     valid = false;
                     break;
                 }
@@ -620,11 +627,41 @@ fn decimateTimed(
     return allocator.dupe(Key, output.items);
 }
 
+pub const OptimizationSetting = struct {
+    tolerance: f32 = 1e-3,
+    distance: f32 = 1e-1,
+};
+
+pub const JointOptimizationSetting = struct {
+    joint: usize,
+    setting: OptimizationSetting,
+};
+
 pub const OptimizationSettings = struct {
+    /// Component tolerances retained for source compatibility. Setting
+    /// `tolerance` applies one upstream-compatible tolerance to all components.
     translation_tolerance: f32 = 1e-3,
     rotation_tolerance: f32 = 1e-3,
     scale_tolerance: f32 = 1e-3,
+    tolerance: ?f32 = null,
+    distance: f32 = 1e-1,
+    joint_overrides: []const JointOptimizationSetting = &.{},
 };
+
+const HierarchySpec = struct {
+    length: f32,
+    scale: f32,
+    translation_tolerance: f32,
+    rotation_tolerance: f32,
+    scale_tolerance: f32,
+};
+
+fn jointOverride(settings: OptimizationSettings, joint: usize) ?OptimizationSetting {
+    for (settings.joint_overrides) |override| {
+        if (override.joint == joint) return override.setting;
+    }
+    return null;
+}
 
 pub fn optimizeAnimation(
     allocator: std.mem.Allocator,
@@ -635,6 +672,76 @@ pub fn optimizeAnimation(
     if (!input.validate() or input.tracks.len != skeleton.numJoints()) {
         return runtime.Error.InvalidTrackCount;
     }
+    const global_translation = settings.tolerance orelse settings.translation_tolerance;
+    const global_rotation = settings.tolerance orelse settings.rotation_tolerance;
+    const global_scale = settings.tolerance orelse settings.scale_tolerance;
+    if (!std.math.isFinite(global_translation) or global_translation < 0 or
+        !std.math.isFinite(global_rotation) or global_rotation < 0 or
+        !std.math.isFinite(global_scale) or global_scale < 0 or
+        !std.math.isFinite(settings.distance) or settings.distance < 0)
+    {
+        return runtime.Error.InvalidLayer;
+    }
+
+    const specs = try allocator.alloc(HierarchySpec, input.tracks.len);
+    defer allocator.free(specs);
+    for (input.tracks, 0..) |track, joint| {
+        var max_scale: f32 = 1;
+        if (track.scales.len != 0) {
+            max_scale = 0;
+            for (track.scales) |key| {
+                max_scale = @max(max_scale, @max(@abs(key.value.x), @max(@abs(key.value.y), @abs(key.value.z))));
+            }
+        }
+        const parent = skeleton.parents[joint];
+        const accumulated_scale = max_scale * if (parent == runtime.no_parent)
+            @as(f32, 1)
+        else
+            specs[@intCast(parent)].scale;
+        const override = jointOverride(settings, joint);
+        if (override) |value| {
+            if (!std.math.isFinite(value.tolerance) or value.tolerance < 0 or
+                !std.math.isFinite(value.distance) or value.distance < 0)
+            {
+                return runtime.Error.InvalidLayer;
+            }
+        }
+        specs[joint] = .{
+            .length = (if (override) |value| value.distance else settings.distance) * accumulated_scale,
+            .scale = accumulated_scale,
+            .translation_tolerance = if (override) |value| value.tolerance else global_translation,
+            .rotation_tolerance = if (override) |value| value.tolerance else global_rotation,
+            .scale_tolerance = if (override) |value| value.tolerance else global_scale,
+        };
+    }
+    var reverse = input.tracks.len;
+    while (reverse > 0) {
+        reverse -= 1;
+        const parent = skeleton.parents[reverse];
+        if (parent == runtime.no_parent) continue;
+        var max_length_sq: f32 = 0;
+        for (input.tracks[reverse].translations) |key| {
+            max_length_sq = @max(max_length_sq, math.Float3.lengthSquared(key.value));
+        }
+        const parent_index: usize = @intCast(parent);
+        specs[parent_index].length = @max(
+            specs[parent_index].length,
+            specs[reverse].length + @sqrt(max_length_sq) * specs[parent_index].scale,
+        );
+        specs[parent_index].translation_tolerance = @min(
+            specs[parent_index].translation_tolerance,
+            specs[reverse].translation_tolerance,
+        );
+        specs[parent_index].rotation_tolerance = @min(
+            specs[parent_index].rotation_tolerance,
+            specs[reverse].rotation_tolerance,
+        );
+        specs[parent_index].scale_tolerance = @min(
+            specs[parent_index].scale_tolerance,
+            specs[reverse].scale_tolerance,
+        );
+    }
+
     var output = try RawAnimation.init(allocator, input.name, input.duration, input.tracks.len);
     errdefer output.deinit();
     for (input.tracks, 0..) |track, i| {
@@ -643,21 +750,30 @@ pub fn optimizeAnimation(
             TranslationKey,
             allocator,
             track.translations,
-            settings.translation_tolerance,
+            specs[i].translation_tolerance,
+            if (skeleton.parents[i] == runtime.no_parent)
+                1
+            else
+                specs[@intCast(skeleton.parents[i])].scale,
+            false,
         );
         output.tracks[i].rotations = try decimateTimed(
             math.Quaternion,
             RotationKey,
             allocator,
             track.rotations,
-            settings.rotation_tolerance,
+            specs[i].rotation_tolerance,
+            specs[i].length,
+            true,
         );
         output.tracks[i].scales = try decimateTimed(
             math.Float3,
             ScaleKey,
             allocator,
             track.scales,
-            settings.scale_tolerance,
+            specs[i].scale_tolerance,
+            specs[i].length,
+            false,
         );
     }
     return output;
