@@ -389,6 +389,19 @@ pub fn RawTrack(comptime T: type) type {
             self.allocator.free(self.keys);
             self.* = undefined;
         }
+
+        pub fn validate(self: Self) bool {
+            var previous: f32 = -1;
+            for (self.keys) |key| {
+                if (!std.math.isFinite(key.ratio) or key.ratio < 0 or key.ratio > 1 or
+                    key.ratio <= previous)
+                {
+                    return false;
+                }
+                previous = key.ratio;
+            }
+            return true;
+        }
     };
 }
 
@@ -424,6 +437,7 @@ pub fn buildTrack(
     allocator: std.mem.Allocator,
     raw: RawTrack(T),
 ) !runtime.Track(T) {
+    if (!raw.validate()) return runtime.Error.InvalidKeyframe;
     const RuntimeKey = runtime.Track(T).Key;
     const key_count: usize = if (raw.keys.len == 0)
         0
@@ -525,6 +539,7 @@ pub fn optimizeTrack(
     raw: RawTrack(T),
     tolerance: f32,
 ) !RawTrack(T) {
+    if (!raw.validate()) return runtime.Error.InvalidKeyframe;
     const Key = RawTrack(T).Key;
     if (raw.keys.len == 0) return RawTrack(T).init(allocator, raw.name, raw.keys);
     if (raw.keys.len == 1) {
@@ -719,9 +734,11 @@ pub fn extractMotion(
 
     var rotation_keys: std.ArrayList(RawQuaternionTrack.Key) = .empty;
     defer rotation_keys.deinit(allocator);
-    const inverse_reference = math.Quaternion.conjugate(rotation_ref);
     for (source.rotations, 0..) |key, i| {
-        const relative = math.Quaternion.normalize(math.Quaternion.mul(inverse_reference, key.value));
+        const relative = math.Quaternion.normalize(math.Quaternion.mul(
+            key.value,
+            math.Quaternion.conjugate(rotation_ref),
+        ));
         const extracted_euler = selected3(math.Quaternion.toEuler(relative), options.rotation);
         const extracted = math.Quaternion.fromEuler(extracted_euler);
         try rotation_keys.append(allocator, .{
@@ -730,9 +747,11 @@ pub fn extractMotion(
             .value = extracted,
         });
         if (options.rotation.bake) {
-            const remaining = math.Quaternion.mul(math.Quaternion.conjugate(extracted), relative);
             baked.tracks[options.root_joint].rotations[i].value =
-                math.Quaternion.normalize(math.Quaternion.mul(rotation_ref, remaining));
+                math.Quaternion.normalize(math.Quaternion.mul(
+                    math.Quaternion.conjugate(extracted),
+                    key.value,
+                ));
         }
     }
 
@@ -813,9 +832,9 @@ pub fn buildAdditive(
         }
         for (output.tracks[i].scales) |*key| {
             key.value = .{
-                if (reference.scale[0] != 0) key.value[0] / reference.scale[0] else 0,
-                if (reference.scale[1] != 0) key.value[1] / reference.scale[1] else 0,
-                if (reference.scale[2] != 0) key.value[2] / reference.scale[2] else 0,
+                key.value[0] / reference.scale[0],
+                key.value[1] / reference.scale[1],
+                key.value[2] / reference.scale[2],
             };
         }
     }
@@ -831,34 +850,86 @@ fn decimateTimed(
     distance_scale: f32,
     comptime rotation_distance: bool,
 ) ![]Key {
-    if (keys.len <= 2) return allocator.dupe(Key, keys);
+    const identity: T = if (T == math.Quaternion)
+        math.Quaternion.identity
+    else if (T == math.Vec3f32 and Key == ScaleKey)
+        @splat(1)
+    else
+        @splat(0);
+
+    if (keys.len < 2) {
+        var output = try allocator.dupe(Key, keys);
+        if (output.len == 1) {
+            const distance = if (rotation_distance) blk: {
+                const dot = @abs(math.Quaternion.dot(identity, output[0].value));
+                break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
+            } else valueDistance(T, identity, output[0].value) * distance_scale;
+            if (distance <= tolerance) {
+                allocator.free(output);
+                output = try allocator.alloc(Key, 0);
+            }
+        }
+        return output;
+    }
+
+    const Segment = struct { first: usize, last: usize };
+    var segments: std.ArrayList(Segment) = .empty;
+    defer segments.deinit(allocator);
+    var included = try allocator.alloc(bool, keys.len);
+    defer allocator.free(included);
+    @memset(included, false);
+
+    try segments.append(allocator, .{ .first = 0, .last = keys.len - 1 });
+    included[0] = true;
+    included[keys.len - 1] = true;
+    while (segments.pop()) |segment| {
+        const left = keys[segment.first];
+        const right = keys[segment.last];
+        var maximum: f32 = -1;
+        var candidate = segment.first;
+        for (segment.first + 1..segment.last) |i| {
+            const middle = keys[i];
+            const alpha = (middle.time - left.time) / (right.time - left.time);
+            const interpolated = lerpValue(T, left.value, right.value, alpha);
+            const distance = if (rotation_distance) blk: {
+                const dot = @abs(math.Quaternion.dot(middle.value, interpolated));
+                break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
+            } else valueDistance(T, middle.value, interpolated) * distance_scale;
+            if (distance > tolerance and distance > maximum) {
+                maximum = distance;
+                candidate = i;
+            }
+        }
+        if (candidate != segment.first) {
+            included[candidate] = true;
+            if (candidate - segment.first > 1) {
+                try segments.append(allocator, .{ .first = segment.first, .last = candidate });
+            }
+            if (segment.last - candidate > 1) {
+                try segments.append(allocator, .{ .first = candidate, .last = segment.last });
+            }
+        }
+    }
+
     var output: std.ArrayList(Key) = .empty;
     defer output.deinit(allocator);
-    try output.append(allocator, keys[0]);
-    var anchor: usize = 0;
-    while (anchor + 1 < keys.len) {
-        var candidate = anchor + 2;
-        var best = anchor + 1;
-        while (candidate < keys.len) : (candidate += 1) {
-            var valid = true;
-            for (keys[anchor + 1 .. candidate]) |middle| {
-                const alpha = (middle.time - keys[anchor].time) /
-                    (keys[candidate].time - keys[anchor].time);
-                const interpolated = lerpValue(T, keys[anchor].value, keys[candidate].value, alpha);
-                const distance = if (rotation_distance) blk: {
-                    const dot = @abs(math.Quaternion.dot(middle.value, interpolated));
-                    break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
-                } else valueDistance(T, middle.value, interpolated) * distance_scale;
-                if (distance > tolerance) {
-                    valid = false;
-                    break;
-                }
-            }
-            if (!valid) break;
-            best = candidate;
-        }
-        try output.append(allocator, keys[best]);
-        anchor = best;
+    for (keys, included) |key, keep| {
+        if (keep) try output.append(allocator, key);
+    }
+
+    while (output.items.len != 0) {
+        const last_key = output.items.len == 1;
+        const back = output.items[output.items.len - 1];
+        const previous = if (last_key)
+            identity
+        else
+            output.items[output.items.len - 2].value;
+        const distance = if (rotation_distance) blk: {
+            const dot = @abs(math.Quaternion.dot(previous, back.value));
+            break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
+        } else valueDistance(T, previous, back.value) * distance_scale;
+        if (distance > tolerance) break;
+        _ = output.pop();
     }
     return allocator.dupe(Key, output.items);
 }

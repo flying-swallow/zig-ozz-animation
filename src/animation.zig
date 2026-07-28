@@ -662,14 +662,18 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                         math.Quaternion.nlerp(.identity, add.rotation, weight),
                     );
                 } else {
-                    const reciprocal_scale: math.Vec3f32 = .{
-                        if (add.scale[0] != 0) 1 / add.scale[0] else 0,
-                        if (add.scale[1] != 0) 1 / add.scale[1] else 0,
-                        if (add.scale[2] != 0) 1 / add.scale[2] else 0,
-                    };
+                    const weighted_scale = math.approx.lerp_exact(
+                        @as(math.Vec3f32, @splat(1)),
+                        add.scale,
+                        -weight,
+                    );
                     result.scale = math.vec.mul(
                         result.scale,
-                        math.approx.lerp_exact(@as(math.Vec3f32, @splat(1)), reciprocal_scale, -weight),
+                        .{
+                            1 / weighted_scale[0],
+                            1 / weighted_scale[1],
+                            1 / weighted_scale[2],
+                        },
                     );
                     result.rotation = math.Quaternion.mul(
                         result.rotation,

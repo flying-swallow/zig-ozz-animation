@@ -6,10 +6,13 @@ The pinned tree contains 68 C++ test sources, 386 GoogleTest declarations, and
 every source, its declaration count, and its classification below. It fails on
 an added, removed, renamed, or declaration-count-changed source; new sources
 cannot silently inherit a broad path classification. Classification changes
-are explicit manifest edits. Applicable assertions are consolidated into
-focused Zig behavior tests rather than reproducing GoogleTest/CMake scaffolding
-one-for-one. `adapted` means behavior is tested through the idiomatic Zig or
-Caliper API. `partial/adapted`,
+are explicit manifest edits. Sources classified as `ported`, plus the directly
+mapped box, rect, vector, quaternion, and transform math adapters, additionally
+require an exact `Suite/Name` Zig test declaration for every upstream
+GoogleTest declaration. Applicable assertions in other adapted suites are
+consolidated into focused Zig behavior tests rather than reproducing
+GoogleTest/CMake scaffolding one-for-one. `adapted` means behavior is tested
+through the idiomatic Zig or Caliper API. `partial/adapted`,
 `ported/adapted`, and `N/A` are distinct machine-readable statuses. Source
 classification is an inventory guard, not a claim that every individual
 GoogleTest assertion has been ported.
@@ -48,10 +51,10 @@ CLI is not excludable merely because its implementation uses Zig or Caliper.
 | Upstream test source group | Status | Zig suite / reason |
 | --- | --- | --- |
 | `animation/runtime/*_tests.cc` | partial/adapted | `runtime.zig`, `archive.zig`; skeleton traversal, ranged/excluded local-to-model, motion blending, triggering, and aim/two-bone IK cases are ported |
-| `animation/offline/additive_animation_builder_tests.cc` | ported | `offline.zig` |
+| `animation/offline/additive_animation_builder_tests.cc` | ported | `offline.zig`; translation, rotation, scale, first-key and supplied reference poses, metadata, and invalid reference sizes |
 | `animation/offline/animation_builder_tests.cc` | ported/adapted | `offline.zig`; observable cross-track ordering and 65,500-key sampling stress coverage |
-| `animation/offline/animation_optimizer_tests.cc` | partial/adapted | `offline.zig`; key reduction, hierarchy scale, and overrides are covered, but the C++ assertion matrix is broader |
-| `animation/offline/motion_extractor_tests.cc` | partial/adapted | `offline.zig`; component extraction, baking, invalid roots, and coupled position/yaw correction are covered; reference/loop combinations remain consolidated rather than assertion-complete |
+| `animation/offline/animation_optimizer_tests.cc` | ported/adapted | `offline.zig`; upstream RDP reduction, identity/constant endpoint pruning, positive/negative/downstream hierarchy scale, rotation distance, and root/leaf override propagation |
+| `animation/offline/motion_extractor_tests.cc` | ported/adapted | `offline.zig`; component masks, absolute/skeleton/animation references, independent baking and looping, irregular keys, invalid roots, non-commuting rotations, and coupled position/yaw correction |
 | `animation/offline/raw_*_tests.cc` | ported/adapted | `offline.zig`, `archive.zig` |
 | `animation/offline/skeleton_builder_tests.cc` | ported/adapted | `offline.zig`; hierarchy traversal, ordering, rest pose, multiple roots, and joint-count limits |
 | `animation/offline/track_builder_tests.cc` | ported/adapted | `offline.zig`; boundary keys, interpolation, supported types, and quaternion fixup are covered; C++ move ownership is N/A |
@@ -61,7 +64,7 @@ CLI is not excludable merely because its implementation uses Zig or Caliper.
 | Collada/DAE importer registrations | N/A | DAE handling is supplied only through the excluded FBX importer |
 | `animation/offline/tools/test2ozz.cc` fake importer behavior | N/A | C++ test-plugin plumbing |
 | `animation/offline/tools/CMakeLists.txt` shared CLI behavior | adapted | Zig CLI tests |
-| Scalar/vector/quaternion/transform/box/rect math behavior | adapted | `math.zig`; Caliper-backed Zig types |
+| Scalar/vector/quaternion/transform/box/rect math behavior | adapted | `math.zig`; Caliper-backed Zig types, with exact upstream declaration evidence for the directly mapped vector/quaternion/transform/box/rect suites |
 | C++ SIMD/SoA instruction-level API and archive layout | N/A | Zig publicly exposes smaller vector/SoA carrier types used by its runtime, with their own adapter tests; it does not expose the upstream instruction-level function set or binary archive contract |
 | `base/encode/group_varint_tests.cc` | N/A | Internal C++ codec has no public or storage-format role in the Zig port |
 | `base/endianness_tests.cc` | adapted | `archive.zig` |
@@ -74,7 +77,7 @@ CLI is not excludable merely because its implementation uses Zig or Caliper.
 | `base/log_tests.cc` | N/A | C++ stream-routing and log-level implementation; no public Zig logging facade |
 | `base/platform_tests.cc` | N/A | C++ compiler, architecture, endianness, and assertion macro layer |
 | `base/span_tests.cc` | N/A | Zig slices replace `ozz::span` |
-| `geometry/runtime/skinning_job_tests.cc` | ported/adapted | `geometry.zig`; packed and strided 1-N influence paths, overlapping records, normals, tangents, and inverse-transpose matrices |
+| `geometry/runtime/skinning_job_tests.cc` | ported/adapted | `geometry.zig`; packed and strided 1-N influence paths, explicit and reconstructed final weights, zero weights, overlapping records, normals, tangents, and inverse-transpose matrices |
 | `options/options_tests.cc` | adapted | fixed unified Zig CLI parsing and validation; generic C++ option registration, repeat parsing, validators, and built-path APIs are outside the replacement boundary |
 | `options/options_registration*_tests.cc` | N/A | C++ global/static registration and duplicate-registration semantics; Zig uses explicit command parsing |
 | `fuse/*` registrations | N/A | generated single-file C++ build/link checks, not additional runtime behavior |

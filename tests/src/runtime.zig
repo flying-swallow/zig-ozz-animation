@@ -793,6 +793,90 @@ test "AdditiveJointWeight/BlendingJob" {
     try h.expectFloat(2, math.soaLane(output[0], 1).translation[0]);
 }
 
+test "RotationScaleHemisphereAndNegativeAdditive/BlendingJob" {
+    const quarter_turn = math.Quaternion.fromAxisAngle(
+        .{ 0, 0, 1 },
+        @as(f32, std.math.pi) / 2,
+    );
+    var normal_a: [1]math.SoaTransform = undefined;
+    var normal_b: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&.{.{
+        .translation = .{ 2, 4, 6 },
+        .rotation = quarter_turn,
+        .scale = .{ 2, 3, 4 },
+    }}, &normal_a);
+    math.aosToSoa(&.{.{
+        .translation = .{ 2, 4, 6 },
+        .rotation = math.Quaternion.negate(quarter_turn),
+        .scale = .{ 2, 3, 4 },
+    }}, &normal_b);
+    var output: [1]math.SoaTransform = undefined;
+    try animation.blend(.{
+        .rest_pose = &.{math.SoaTransform.identity},
+        .layers = &.{
+            .{ .transforms = &normal_a, .weight = 0.25 },
+            .{ .transforms = &normal_b, .weight = 0.75 },
+        },
+    }, &output);
+    const normal = math.soaLane(output[0], 0);
+    try h.expectFloat3(.{ 2, 4, 6 }, normal.translation);
+    try h.expectQuaternion(quarter_turn, normal.rotation);
+    try h.expectFloat3(.{ 2, 3, 4 }, normal.scale);
+
+    var additive: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&.{.{
+        .translation = .{ 4, 0, 0 },
+        .rotation = quarter_turn,
+        .scale = .{ 2, 2, 2 },
+    }}, &additive);
+    try animation.blend(.{
+        .rest_pose = &.{math.SoaTransform.identity},
+        .layers = &.{},
+        .additive_layers = &.{.{ .transforms = &additive, .weight = -0.5 }},
+    }, &output);
+    const subtracted = math.soaLane(output[0], 0);
+    try h.expectFloat3(.{ -2, 0, 0 }, subtracted.translation);
+    try h.expectFloat3(@splat(2.0 / 3.0), subtracted.scale);
+    try h.expectFloat3(
+        .{ @sqrt(@as(f32, 0.5)), -@sqrt(@as(f32, 0.5)), 0 },
+        math.Quaternion.rotate(subtracted.rotation, .{ 1, 0, 0 }),
+    );
+}
+
+test "ExtendedAdditiveWeights/BlendingJob" {
+    const rotation = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 3);
+    var additive: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&.{
+        .{ .translation = .{ 2, 0, 0 }, .rotation = rotation, .scale = .{ 2, 3, 4 } },
+        .{ .translation = .{ 4, 0, 0 }, .rotation = rotation, .scale = .{ 2, 3, 4 } },
+        .{ .translation = .{ 8, 0, 0 }, .rotation = rotation, .scale = .{ 2, 3, 4 } },
+        .{ .translation = .{ 16, 0, 0 }, .rotation = rotation, .scale = .{ 2, 3, 4 } },
+    }, &additive);
+    const joint_weights: [1]math.SimdFloat4 = .{.{ 1, 0.5, -1, 2 }};
+    var output: [1]math.SoaTransform = undefined;
+    try animation.blend(.{
+        .rest_pose = &.{math.SoaTransform.identity},
+        .layers = &.{},
+        .additive_layers = &.{.{ .transforms = &additive, .weight = 2, .joint_weights = &joint_weights }},
+    }, &output);
+    try h.expectFloat3(.{ 4, 0, 0 }, math.soaLane(output[0], 0).translation);
+    try h.expectFloat3(.{ 4, 0, 0 }, math.soaLane(output[0], 1).translation);
+    try h.expectTransform(.identity, math.soaLane(output[0], 2));
+    try h.expectFloat3(.{ 64, 0, 0 }, math.soaLane(output[0], 3).translation);
+
+    var singular: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&.{.{ .scale = .{ -1, 0, 1 } }}, &singular);
+    try animation.blend(.{
+        .rest_pose = &.{math.SoaTransform.identity},
+        .layers = &.{},
+        .additive_layers = &.{.{ .transforms = &singular, .weight = -0.5 }},
+    }, &output);
+    const scale = math.soaLane(output[0], 0).scale;
+    try std.testing.expect(std.math.isInf(scale[0]));
+    try h.expectFloat(2, scale[1]);
+    try h.expectFloat(1, scale[2]);
+}
+
 test "JobValidityAdditive/BlendingJob" {
     var output: [1]math.SoaTransform = undefined;
     try std.testing.expectError(animation.Error.InvalidLayer, animation.blend(.{
@@ -1064,7 +1148,7 @@ test "MatrixVariants/IKAimJob" {
     }
 }
 
-test "ForwardUpPoleAndAlignment/IKAimJob" {
+test "Forward/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     var options: animation.AimOptions = .{
         .target = .{ 1, 0, 0 },
@@ -1234,6 +1318,28 @@ test "ZeroLengthBoneChain/IKTwoBoneJob" {
     try std.testing.expect(!result.reached);
 }
 
+test "ZeroLengthStartTarget/IKTwoBoneJob" {
+    const result = try animation.twoBoneIk(.{
+        .target = @splat(0),
+        .start_joint = .identity,
+        .mid_joint = math.Float4x4.fromTransform(.{
+            .translation = .{ 0, 1, 0 },
+            .rotation = math.Quaternion.fromAxisAngle(
+                .{ 0, 0, 1 },
+                @as(f32, std.math.pi) / 2,
+            ),
+        }),
+        .end_joint = math.Float4x4.fromTransform(.{
+            .translation = .{ 1, 1, 0 },
+        }),
+    });
+    try h.expectQuaternion(.identity, result.start_correction);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -@as(f32, std.math.pi) / 2),
+        result.mid_correction,
+    );
+}
+
 test "StartJointCorrection/IKTwoBoneJob" {
     const result = try animation.twoBoneIk(.{
         .target = .{ 1, 1, 0 },
@@ -1282,7 +1388,18 @@ test "MidAxisAndZeroTarget/IKTwoBoneJob" {
     try std.testing.expect(!folded.reached);
 }
 
-test "SoftenReachability/IKTwoBoneJob" {
+test "JobValidity/IKTwoBoneJob" {
+    var invalid = bentIkOptions(.{ 1, 1, 0 });
+    invalid.mid_axis = .{ 0.5, 0, 0 };
+    try std.testing.expectError(animation.Error.InvalidLayer, animation.twoBoneIk(invalid));
+
+    const valid = try animation.twoBoneIk(bentIkOptions(.{ 1, 1, 0 }));
+    try std.testing.expect(valid.reached);
+    try h.expectQuaternion(.identity, valid.start_correction);
+    try h.expectQuaternion(.identity, valid.mid_correction);
+}
+
+test "Soften/IKTwoBoneJob" {
     var options = bentIkOptions(.{ 1, 0, 0 });
     options.soften = 0.5;
     try std.testing.expect((try animation.twoBoneIk(options)).reached);
@@ -1293,7 +1410,7 @@ test "SoftenReachability/IKTwoBoneJob" {
     try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
 }
 
-test "TwistAndZeroScale/IKTwoBoneJob" {
+test "Twist/IKTwoBoneJob" {
     var twist_options = bentIkOptions(.{ 1, 1, 0 });
     twist_options.twist_angle = @as(f32, std.math.pi) / 2;
     const twisted = try animation.twoBoneIk(twist_options);
@@ -1305,7 +1422,9 @@ test "TwistAndZeroScale/IKTwoBoneJob" {
         twisted.start_correction,
     );
     try h.expectQuaternion(.identity, twisted.mid_correction);
+}
 
+test "ZeroScale/IKTwoBoneJob" {
     const zero = math.Float4x4.fromTransform(.{ .scale = @splat(0) });
     const degenerate = try animation.twoBoneIk(.{
         .target = .{ 1, 0, 0 },

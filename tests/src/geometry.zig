@@ -149,6 +149,36 @@ test "Run/SkinningJob" {
     try h.expectFloat3(.{ 1, 0, 0 }, tangents[0]);
 }
 
+test "JobResult/SkinningJob" {
+    const matrices = [_]math.Float4x4{
+        math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
+        math.Float4x4.fromTransform(.{ .translation = .{ 0, 4, 0 } }),
+        math.Float4x4.fromTransform(.{ .translation = .{ 0, 0, 8 } }),
+    };
+    var implicit_output: [1]math.Vec3f32 = undefined;
+    try geometry.skin(.{
+        .joint_matrices = &matrices,
+        .joint_indices = &.{ 0, 1, 2 },
+        .joint_weights = &.{ 0, 0.25 },
+        .input_positions = &.{@as(math.Vec3f32, @splat(0))},
+        .output_positions = &implicit_output,
+        .influences_count = 3,
+    });
+    // Zero explicit weights are skipped and the final weight is reconstructed.
+    try h.expectFloat3(.{ 0, 1, 6 }, implicit_output[0]);
+
+    var full_output: [1]math.Vec3f32 = undefined;
+    try geometry.skin(.{
+        .joint_matrices = &matrices,
+        .joint_indices = &.{ 0, 1, 2 },
+        .joint_weights = &.{ 0.5, 0.25, 0.25 },
+        .input_positions = &.{@as(math.Vec3f32, @splat(0))},
+        .output_positions = &full_output,
+        .influences_count = 3,
+    });
+    try h.expectFloat3(.{ 1, 1, 2 }, full_output[0]);
+}
+
 test "RunInverseTranspose/SkinningJob" {
     const matrix = math.Float4x4.fromTransform(.{ .scale = .{ 2, 3, 4 } });
     const inverse_transpose: math.Float4x4 = .{ .cols = .{

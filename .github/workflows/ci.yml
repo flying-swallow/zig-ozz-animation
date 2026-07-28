@@ -27,6 +27,17 @@ jobs:
           version: master
       - run: zig build check -Dtarget=wasm32-wasi
 
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - name: Run upstream semantic conformance tests
+        run: zig build test
+        working-directory: tests
+
   # The samples are a separate package. `check` compiles all 17 executables and
   # `test` runs their headless feature-path tests plus the framework unit tests;
   # neither needs a GPU or a display. `smoke` does, so it is not run here.

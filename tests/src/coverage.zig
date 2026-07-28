@@ -21,9 +21,9 @@ const Source = struct {
 const sources = [_]Source{
     .{ .path = "animation/offline/additive_animation_builder_tests.cc", .tests = 3, .status = .ported },
     .{ .path = "animation/offline/animation_builder_tests.cc", .tests = 6, .status = .ported_adapted },
-    .{ .path = "animation/offline/animation_optimizer_tests.cc", .tests = 4, .status = .partial_adapted },
+    .{ .path = "animation/offline/animation_optimizer_tests.cc", .tests = 4, .status = .ported_adapted },
     .{ .path = "animation/offline/fbx/fuse_ozz_animation_fbx_tests.cc", .tests = 0, .status = .not_applicable },
-    .{ .path = "animation/offline/motion_extractor_tests.cc", .tests = 2, .status = .partial_adapted },
+    .{ .path = "animation/offline/motion_extractor_tests.cc", .tests = 2, .status = .ported_adapted },
     .{ .path = "animation/offline/raw_animation_archive_tests.cc", .tests = 3, .status = .ported_adapted },
     .{ .path = "animation/offline/raw_animation_archive_versioning_tests.cc", .tests = 1, .status = .ported_adapted },
     .{ .path = "animation/offline/raw_animation_utils_tests.cc", .tests = 6, .status = .ported_adapted },
@@ -96,6 +96,58 @@ fn findSource(path: []const u8) ?Source {
     return null;
 }
 
+fn hasZigTestDeclaration(allocator: std.mem.Allocator, label: []const u8) !bool {
+    var directory = try std.Io.Dir.cwd().openDir(std.testing.io, "src", .{ .iterate = true });
+    defer directory.close(std.testing.io);
+    var walker = try directory.walk(allocator);
+    defer walker.deinit();
+    const needle = try std.fmt.allocPrint(allocator, "test \"{s}\"", .{label});
+    defer allocator.free(needle);
+    while (try walker.next(std.testing.io)) |entry| {
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+        const bytes = try entry.dir.readFileAlloc(
+            std.testing.io,
+            entry.basename,
+            allocator,
+            .limited(2 * 1024 * 1024),
+        );
+        defer allocator.free(bytes);
+        if (std.mem.indexOf(u8, bytes, needle) != null) return true;
+    }
+    return false;
+}
+
+fn verifyPortedDeclarations(allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !void {
+    var offset: usize = 0;
+    while (std.mem.indexOfPos(u8, bytes, offset, "TEST(")) |test_start| {
+        const arguments_start = test_start + "TEST(".len;
+        const comma = std.mem.indexOfPos(u8, bytes, arguments_start, ",") orelse
+            return error.MalformedUpstreamTestDeclaration;
+        const close = std.mem.indexOfPos(u8, bytes, comma + 1, ")") orelse
+            return error.MalformedUpstreamTestDeclaration;
+        const suite = std.mem.trim(u8, bytes[arguments_start..comma], " \t\r\n");
+        const name = std.mem.trim(u8, bytes[comma + 1 .. close], " \t\r\n");
+        const label = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ suite, name });
+        defer allocator.free(label);
+        if (!try hasZigTestDeclaration(allocator, label)) {
+            std.debug.print("ported upstream test lacks exact Zig evidence: {s}: {s}\n", .{ path, label });
+            return error.MissingPortedTestEvidence;
+        }
+        offset = close + 1;
+    }
+}
+
+fn requiresExactEvidence(source: Source) bool {
+    if (source.status == .ported) return true;
+    return std.mem.eql(u8, source.path, "animation/offline/animation_optimizer_tests.cc") or
+        std.mem.eql(u8, source.path, "animation/offline/motion_extractor_tests.cc") or
+        std.mem.eql(u8, source.path, "base/maths/box_tests.cc") or
+        std.mem.eql(u8, source.path, "base/maths/quaternion_tests.cc") or
+        std.mem.eql(u8, source.path, "base/maths/rect_tests.cc") or
+        std.mem.eql(u8, source.path, "base/maths/transform_tests.cc") or
+        std.mem.eql(u8, source.path, "base/maths/vec_float_tests.cc");
+}
+
 test "upstream test inventory is pinned and explicitly classified" {
     const allocator = std.testing.allocator;
     const root = try h.fixturePath(allocator, "test");
@@ -139,9 +191,12 @@ test "upstream test inventory is pinned and explicitly classified" {
                 );
                 return error.UpstreamDeclarationCountChanged;
             }
+            if (requiresExactEvidence(source)) {
+                try verifyPortedDeclarations(allocator, source.path, bytes);
+            }
             source_count += 1;
             google_test_count += declarations;
-            status_counts[@intFromEnum(source.status)] += 1;
+            status_counts[@backingInt(source.status)] += 1;
         } else if (std.mem.eql(u8, entry.basename, "CMakeLists.txt")) {
             const bytes = try entry.dir.readFileAlloc(
                 std.testing.io,
