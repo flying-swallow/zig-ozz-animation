@@ -8,10 +8,113 @@ fn readFixture(allocator: std.mem.Allocator, relative: []const u8) ![]u8 {
     return std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, allocator, .limited(32 * 1024 * 1024));
 }
 
+fn writeF32(bytes: []u8, offset: usize, value: f32) void {
+    std.mem.writeInt(u32, bytes[offset..][0..4], @bitCast(value), .little);
+}
+
+fn testAnimationBinary(bytes: []u8) void {
+    @memset(bytes, 0);
+    writeF32(bytes, 0, 0);
+    writeF32(bytes, 4, 1);
+    writeF32(bytes, 8, 0);
+    writeF32(bytes, 12, 0);
+    writeF32(bytes, 16, 0);
+    writeF32(bytes, 20, 1);
+    writeF32(bytes, 24, 2);
+    writeF32(bytes, 28, 3);
+}
+
+fn makeTestGlb(allocator: std.mem.Allocator) ![]u8 {
+    const json =
+        \\{"asset":{"version":"2.0"},"nodes":[{"name":"root"}],"skins":[{"joints":[0]}],"buffers":[{"byteLength":32}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":1,"componentType":5126,"count":2,"type":"VEC3"}],"animations":[{"name":"move","samplers":[{"input":0,"output":1}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}]}
+    ;
+    const json_len = std.mem.alignForward(usize, json.len, 4);
+    const total_len = 12 + 8 + json_len + 8 + 32;
+    const glb = try allocator.alloc(u8, total_len);
+    @memset(glb, 0);
+    std.mem.writeInt(u32, glb[0..4], 0x46546c67, .little);
+    std.mem.writeInt(u32, glb[4..8], 2, .little);
+    std.mem.writeInt(u32, glb[8..12], @intCast(total_len), .little);
+    std.mem.writeInt(u32, glb[12..16], @intCast(json_len), .little);
+    std.mem.writeInt(u32, glb[16..20], 0x4e4f534a, .little);
+    @memset(glb[20 .. 20 + json_len], ' ');
+    @memcpy(glb[20 .. 20 + json.len], json);
+    const bin_header = 20 + json_len;
+    std.mem.writeInt(u32, glb[bin_header..][0..4], 32, .little);
+    std.mem.writeInt(u32, glb[bin_header + 4 ..][0..4], 0x004e4942, .little);
+    testAnimationBinary(glb[bin_header + 8 ..][0..32]);
+    return glb;
+}
+
 test "gltf2ozz_bad_content" {
     try std.testing.expectError(
         ozz.gltf.Error.ParseFailed,
         ozz.gltf.importSkeleton(std.testing.allocator, "bad content", 0),
+    );
+}
+
+test "gltf2ozz_glb_animation" {
+    const allocator = std.testing.allocator;
+    const glb = try makeTestGlb(allocator);
+    defer allocator.free(glb);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "animation.glb", .data = glb });
+    const path = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}/animation.glb",
+        .{&tmp.sub_path},
+    );
+    defer allocator.free(path);
+
+    var raw = try ozz.gltf.importSkeleton(allocator, glb, 0);
+    defer raw.deinit();
+    var skeleton = try ozz.offline.SkeletonBuilder.build(allocator, raw);
+    defer skeleton.deinit();
+    const animations = try ozz.gltf.importAnimationsFileWithOptions(
+        allocator,
+        path,
+        skeleton,
+        .{ .io = std.testing.io },
+    );
+    defer ozz.gltf.deinitAnimations(allocator, animations);
+    try std.testing.expectEqual(@as(usize, 1), animations.len);
+    try std.testing.expectEqualStrings("move", animations[0].name);
+    const joint = ozz.animation.findJoint(skeleton, "root").?;
+    try std.testing.expectEqual(@as(usize, 2), animations[0].tracks[joint].translations.len);
+    try h.expectFloat3(
+        .{ 1, 2, 3 },
+        animations[0].tracks[joint].translations[1].value,
+    );
+}
+
+test "gltf2ozz_missing_external_buffer" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\{"asset":{"version":"2.0"},"nodes":[{"name":"root"}],"skins":[{"joints":[0]}],"buffers":[{"byteLength":32,"uri":"missing.bin"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":24}],"accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR"},{"bufferView":1,"componentType":5126,"count":2,"type":"VEC3"}],"animations":[{"samplers":[{"input":0,"output":1}],"channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}]}
+    ;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "missing.gltf", .data = source });
+    const path = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}/missing.gltf",
+        .{&tmp.sub_path},
+    );
+    defer allocator.free(path);
+
+    var raw = try ozz.gltf.importSkeleton(allocator, source, 0);
+    defer raw.deinit();
+    var skeleton = try ozz.offline.SkeletonBuilder.build(allocator, raw);
+    defer skeleton.deinit();
+    try std.testing.expectError(
+        ozz.gltf.Error.BufferLoadFailed,
+        ozz.gltf.importAnimationsFileWithOptions(
+            allocator,
+            path,
+            skeleton,
+            .{ .io = std.testing.io },
+        ),
     );
 }
 

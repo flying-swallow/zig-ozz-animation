@@ -26,3 +26,25 @@ jobs:
         with:
           version: master
       - run: zig build check -Dtarget=wasm32-wasi
+
+  # The samples are a separate package. `check` compiles all 17 executables and
+  # `test` runs their headless feature-path tests plus the framework unit tests;
+  # neither needs a GPU or a display. `smoke` does, so it is not run here.
+  samples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: master
+      - name: Install SDL build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev \
+            libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev
+      - name: Test samples
+        run: zig build test
+        working-directory: samples
+      - name: Compile every sample
+        run: zig build check
+        working-directory: samples

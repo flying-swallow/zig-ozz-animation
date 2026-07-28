@@ -214,13 +214,15 @@ fn validateFixture(fixture: Fixture) !void {
         var consumed = view.len;
         switch (kind) {
             .skeleton => {
-                var value = try ozz.legacy.readSkeleton(allocator, view, .{});
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readSkeleton(allocator, &reader, .{});
                 defer value.deinit();
                 try std.testing.expect(value.numJoints() > 0);
                 try nativeSkeletonRoundTrip(allocator, value);
             },
             .animation => {
-                var value = try ozz.legacy.readAnimation(allocator, view, .{});
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readAnimation(allocator, &reader, .{});
                 defer value.deinit();
                 try std.testing.expect(value.duration > 0);
                 var context = try ozz.animation.SamplingContext.init(allocator, value.numTracks());
@@ -231,7 +233,8 @@ fn validateFixture(fixture: Fixture) !void {
                 try nativeAnimationRoundTrip(allocator, value);
             },
             .raw_animation => {
-                var value = try ozz.legacy.readRawAnimation(allocator, view, .{});
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readRawAnimation(allocator, &reader, .{});
                 defer value.deinit();
                 try std.testing.expect(value.validate());
                 var runtime = try ozz.offline.AnimationBuilder.build(allocator, value);
@@ -239,22 +242,25 @@ fn validateFixture(fixture: Fixture) !void {
                 try nativeRawAnimationRoundTrip(allocator, value);
             },
             .float_track => {
-                var value = try ozz.legacy.readTrackPrefix(f32, allocator, view, .{}, &consumed);
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readTrackPrefix(f32, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 _ = value.sampleAt(0.5);
                 try nativeTrackRoundTrip(f32, allocator, value);
             },
             .float3_track => {
-                var value = try ozz.legacy.readTrackPrefix(ozz.math.Float3, allocator, view, .{}, &consumed);
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readTrackPrefix(ozz.math.Vec3f32, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 if (value.keys.len != 0) {
                     const sample = value.sampleAt(0.5);
-                    try std.testing.expect(std.math.isFinite(sample.x));
+                    try std.testing.expect(std.math.isFinite(sample[0]));
                 }
-                try nativeTrackRoundTrip(ozz.math.Float3, allocator, value);
+                try nativeTrackRoundTrip(ozz.math.Vec3f32, allocator, value);
             },
             .quaternion_track => {
-                var value = try ozz.legacy.readTrackPrefix(ozz.math.Quaternion, allocator, view, .{}, &consumed);
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readTrackPrefix(ozz.math.Quaternion, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 if (value.keys.len != 0) {
                     const sample = value.sampleAt(0.5);
@@ -263,7 +269,8 @@ fn validateFixture(fixture: Fixture) !void {
                 try nativeTrackRoundTrip(ozz.math.Quaternion, allocator, value);
             },
             .sample_mesh => {
-                var value = try ozz.legacy.readMeshPrefix(allocator, view, .{}, &consumed);
+                var reader = std.Io.Reader.fixed(view);
+                var value = try ozz.legacy.readMeshPrefix(allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 try std.testing.expect(value.vertexCount() > 0);
                 try nativeMeshRoundTrip(allocator, value);
@@ -313,19 +320,22 @@ fn validateSkinnedFixture(
     const allocator = std.testing.allocator;
     const skeleton_bytes = try readFixture(allocator, skeleton_name);
     defer allocator.free(skeleton_bytes);
-    var skeleton = try ozz.legacy.readSkeleton(allocator, skeleton_bytes, .{});
+    var skeleton_reader = std.Io.Reader.fixed(skeleton_bytes);
+    var skeleton = try ozz.legacy.readSkeleton(allocator, &skeleton_reader, .{});
     defer skeleton.deinit();
 
     const animation_bytes = try readFixture(allocator, animation_name);
     defer allocator.free(animation_bytes);
-    var animation = try ozz.legacy.readAnimation(allocator, animation_bytes, .{});
+    var animation_reader = std.Io.Reader.fixed(animation_bytes);
+    var animation = try ozz.legacy.readAnimation(allocator, &animation_reader, .{});
     defer animation.deinit();
     try std.testing.expectEqual(skeleton.numJoints(), animation.numTracks());
 
     const mesh_bytes = try readFixture(allocator, mesh_name);
     defer allocator.free(mesh_bytes);
     var consumed: usize = 0;
-    var mesh = try ozz.legacy.readMeshPrefix(allocator, mesh_bytes, .{}, &consumed);
+    var mesh_reader = std.Io.Reader.fixed(mesh_bytes);
+    var mesh = try ozz.legacy.readMeshPrefix(allocator, &mesh_reader, .{}, &consumed);
     defer mesh.deinit();
     try std.testing.expect(consumed > 0);
 
@@ -349,16 +359,16 @@ fn validateSkinnedFixture(
     const part = mesh.parts[0];
     const influences = part.influencesCount();
     try std.testing.expect(influences > 0);
-    const input = [_]ozz.math.Float3{.{
-        .x = part.positions[0],
-        .y = part.positions[1],
-        .z = part.positions[2],
+    const input = [_]ozz.math.Vec3f32{.{
+        part.positions[0],
+        part.positions[1],
+        part.positions[2],
     }};
     const weight_count = if (part.joint_weights.len == part.vertexCount() * influences)
         influences
     else
         influences - 1;
-    var output: [1]ozz.math.Float3 = undefined;
+    var output: [1]ozz.math.Vec3f32 = undefined;
     try ozz.geometry.skin(.{
         .joint_matrices = skinning_matrices,
         .joint_indices = part.joint_indices[0..influences],
@@ -367,9 +377,9 @@ fn validateSkinnedFixture(
         .output_positions = &output,
         .influences_count = influences,
     });
-    try std.testing.expect(std.math.isFinite(output[0].x));
-    try std.testing.expect(std.math.isFinite(output[0].y));
-    try std.testing.expect(std.math.isFinite(output[0].z));
+    try std.testing.expect(std.math.isFinite(output[0][0]));
+    try std.testing.expect(std.math.isFinite(output[0][1]));
+    try std.testing.expect(std.math.isFinite(output[0][2]));
 }
 
 test "upstream character assets sample through local-to-model and skinning" {
@@ -389,22 +399,34 @@ test "representative upstream media truncation is rejected" {
         const truncated = bytes[0 .. bytes.len - 1];
         const kind = try ozz.legacy.detect(truncated);
         switch (kind) {
-            .skeleton => try std.testing.expectError(
-                ozz.legacy.Error.TruncatedArchive,
-                ozz.legacy.readSkeleton(std.testing.allocator, truncated, .{}),
-            ),
-            .animation => try std.testing.expectError(
-                ozz.legacy.Error.TruncatedArchive,
-                ozz.legacy.readAnimation(std.testing.allocator, truncated, .{}),
-            ),
-            .float_track => try std.testing.expectError(
-                ozz.legacy.Error.TruncatedArchive,
-                ozz.legacy.readTrack(f32, std.testing.allocator, truncated, .{}),
-            ),
-            .sample_mesh => try std.testing.expectError(
-                ozz.legacy.Error.TruncatedArchive,
-                ozz.legacy.readMesh(std.testing.allocator, truncated, .{}),
-            ),
+            .skeleton => {
+                var reader = std.Io.Reader.fixed(truncated);
+                try std.testing.expectError(
+                    ozz.legacy.Error.TruncatedArchive,
+                    ozz.legacy.readSkeleton(std.testing.allocator, &reader, .{}),
+                );
+            },
+            .animation => {
+                var reader = std.Io.Reader.fixed(truncated);
+                try std.testing.expectError(
+                    ozz.legacy.Error.TruncatedArchive,
+                    ozz.legacy.readAnimation(std.testing.allocator, &reader, .{}),
+                );
+            },
+            .float_track => {
+                var reader = std.Io.Reader.fixed(truncated);
+                try std.testing.expectError(
+                    ozz.legacy.Error.TruncatedArchive,
+                    ozz.legacy.readTrack(f32, std.testing.allocator, &reader, .{}),
+                );
+            },
+            .sample_mesh => {
+                var reader = std.Io.Reader.fixed(truncated);
+                try std.testing.expectError(
+                    ozz.legacy.Error.TruncatedArchive,
+                    ozz.legacy.readMesh(std.testing.allocator, &reader, .{}),
+                );
+            },
             else => unreachable,
         }
     }

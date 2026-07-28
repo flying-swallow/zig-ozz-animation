@@ -17,8 +17,8 @@ pub const Error = error{
     InvalidLayer,
 };
 
-fn finite3(v: math.Float3) bool {
-    return std.math.isFinite(v.x) and std.math.isFinite(v.y) and std.math.isFinite(v.z);
+fn finite3(v: math.Vec3f32) bool {
+    return std.math.isFinite(v[0]) and std.math.isFinite(v[1]) and std.math.isFinite(v[2]);
 }
 
 fn finiteQuat(v: math.Quaternion) bool {
@@ -92,9 +92,9 @@ pub const Skeleton = struct {
     }
 };
 
-pub const Float3Key = extern struct {
+pub const Float3Key = struct {
     ratio: f32,
-    value: math.Float3,
+    value: math.Vec3f32,
 };
 
 pub const QuaternionKey = extern struct {
@@ -112,6 +112,18 @@ pub const JointTrack = struct {
     translations: []Float3Key,
     rotations: []QuaternionKey,
     scales: []Float3Key,
+};
+
+pub const AnimationBuildOptions = struct {
+    /// Interval, in seconds, between random-seek lookup checkpoints.
+    /// `null` disables checkpoint generation.
+    iframe_interval: ?f32 = 10,
+};
+
+const TrackIframes = struct {
+    translations: []u32 = &.{},
+    rotations: []u32 = &.{},
+    scales: []u32 = &.{},
 };
 
 fn validateKeys(comptime Key: type, keys: []const Key) bool {
@@ -133,6 +145,8 @@ pub const Animation = struct {
     name: []u8,
     duration: f32,
     tracks: []JointTrack,
+    iframe_interval: ?f32 = null,
+    iframes: []TrackIframes = &.{},
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -140,12 +154,27 @@ pub const Animation = struct {
         duration: f32,
         inputs: []const JointTrackInput,
     ) !Animation {
+        return initWithOptions(allocator, name, duration, inputs, .{});
+    }
+
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        name: []const u8,
+        duration: f32,
+        inputs: []const JointTrackInput,
+        options: AnimationBuildOptions,
+    ) !Animation {
         // Match Ozz's default runtime Animation: an empty animation may have a
         // zero duration. Populated animations still require positive time.
         if (!std.math.isFinite(duration) or duration < 0 or
             (duration == 0 and inputs.len != 0))
         {
             return Error.InvalidDuration;
+        }
+        if (options.iframe_interval) |interval| {
+            if (!std.math.isFinite(interval) or interval <= 0) {
+                return Error.InvalidDuration;
+            }
         }
         if (inputs.len > max_joints) return Error.InvalidTrackCount;
         const owned_name = try allocator.dupe(u8, name);
@@ -177,10 +206,64 @@ pub const Animation = struct {
             tracks[i].scales = try allocator.dupe(Float3Key, input.scales);
             initialized += 1;
         }
-        return .{ .allocator = allocator, .name = owned_name, .duration = duration, .tracks = tracks };
+
+        var iframes: []TrackIframes = &.{};
+        if (options.iframe_interval != null and inputs.len != 0) {
+            iframes = try allocator.alloc(TrackIframes, inputs.len);
+            @memset(iframes, .{});
+            var iframe_initialized: usize = 0;
+            errdefer {
+                for (iframes[0..iframe_initialized]) |track| {
+                    allocator.free(track.translations);
+                    allocator.free(track.rotations);
+                    allocator.free(track.scales);
+                }
+                allocator.free(iframes);
+            }
+            for (tracks, iframes) |track, *iframe| {
+                iframe.translations = try buildIframes(
+                    Float3Key,
+                    allocator,
+                    track.translations,
+                    duration,
+                    options.iframe_interval.?,
+                );
+                errdefer allocator.free(iframe.translations);
+                iframe.rotations = try buildIframes(
+                    QuaternionKey,
+                    allocator,
+                    track.rotations,
+                    duration,
+                    options.iframe_interval.?,
+                );
+                errdefer allocator.free(iframe.rotations);
+                iframe.scales = try buildIframes(
+                    Float3Key,
+                    allocator,
+                    track.scales,
+                    duration,
+                    options.iframe_interval.?,
+                );
+                iframe_initialized += 1;
+            }
+        }
+        return .{
+            .allocator = allocator,
+            .name = owned_name,
+            .duration = duration,
+            .tracks = tracks,
+            .iframe_interval = options.iframe_interval,
+            .iframes = iframes,
+        };
     }
 
     pub fn deinit(self: *Animation) void {
+        for (self.iframes) |track| {
+            self.allocator.free(track.translations);
+            self.allocator.free(track.rotations);
+            self.allocator.free(track.scales);
+        }
+        self.allocator.free(self.iframes);
         for (self.tracks) |track| {
             self.allocator.free(track.translations);
             self.allocator.free(track.rotations);
@@ -198,7 +281,46 @@ pub const Animation = struct {
     pub fn numSoaTracks(self: Animation) usize {
         return (self.tracks.len + 3) / 4;
     }
+
+    pub fn memorySize(self: Animation) usize {
+        var size = @sizeOf(Animation) + self.name.len +
+            self.tracks.len * @sizeOf(JointTrack) +
+            self.iframes.len * @sizeOf(TrackIframes);
+        for (self.tracks) |track| {
+            size += track.translations.len * @sizeOf(Float3Key);
+            size += track.rotations.len * @sizeOf(QuaternionKey);
+            size += track.scales.len * @sizeOf(Float3Key);
+        }
+        for (self.iframes) |track| {
+            size += track.translations.len * @sizeOf(u32);
+            size += track.rotations.len * @sizeOf(u32);
+            size += track.scales.len * @sizeOf(u32);
+        }
+        return size;
+    }
 };
+
+fn buildIframes(
+    comptime Key: type,
+    allocator: std.mem.Allocator,
+    keys: []const Key,
+    duration: f32,
+    interval: f32,
+) ![]u32 {
+    if (keys.len < 2 or duration <= 0) return allocator.alloc(u32, 0);
+    const count = @as(usize, @intFromFloat(@floor(duration / interval))) + 1;
+    const output = try allocator.alloc(u32, count);
+    var key: usize = 0;
+    for (output, 0..) |*entry, iframe| {
+        const ratio = @min(
+            @as(f32, @floatFromInt(iframe)) * interval / duration,
+            1,
+        );
+        while (key + 1 < keys.len - 1 and keys[key + 1].ratio <= ratio) : (key += 1) {}
+        entry.* = @intCast(key);
+    }
+    return output;
+}
 
 pub const SamplingContext = struct {
     allocator: std.mem.Allocator,
@@ -260,34 +382,51 @@ pub const SamplingContext = struct {
     }
 };
 
-fn keyIndex(comptime Key: type, keys: []const Key, ratio: f32, cached: *u32, forward: bool) usize {
+fn keyIndex(
+    comptime Key: type,
+    keys: []const Key,
+    ratio: f32,
+    cached: *u32,
+    forward: bool,
+    seed: u32,
+) usize {
     if (keys.len < 2) return 0;
-    var index: usize = if (forward) @min(cached.*, keys.len - 2) else 0;
-    if (!forward) {
-        while (index + 1 < keys.len - 1 and keys[index + 1].ratio <= ratio) : (index += 1) {}
-    } else {
-        while (index + 1 < keys.len - 1 and keys[index + 1].ratio <= ratio) : (index += 1) {}
-    }
+    var index: usize = @min(if (forward) cached.* else seed, keys.len - 2);
+    while (index + 1 < keys.len - 1 and keys[index + 1].ratio <= ratio) : (index += 1) {}
     cached.* = @intCast(index);
     return index;
 }
 
-fn sampleFloat3(keys: []const Float3Key, ratio: f32, cache: *u32, fallback: math.Float3, forward: bool) math.Float3 {
+fn sampleFloat3(
+    keys: []const Float3Key,
+    ratio: f32,
+    cache: *u32,
+    fallback: math.Vec3f32,
+    forward: bool,
+    seed: u32,
+) math.Vec3f32 {
     if (keys.len == 0) return fallback;
     if (keys.len == 1 or ratio <= keys[0].ratio) return keys[0].value;
     if (ratio >= keys[keys.len - 1].ratio) return keys[keys.len - 1].value;
-    const i = keyIndex(Float3Key, keys, ratio, cache, forward);
+    const i = keyIndex(Float3Key, keys, ratio, cache, forward, seed);
     const a = keys[i];
     const b = keys[i + 1];
     const alpha = (ratio - a.ratio) / (b.ratio - a.ratio);
-    return math.Float3.lerp(a.value, b.value, alpha);
+    return math.approx.lerp_exact(a.value, b.value, alpha);
 }
 
-fn sampleQuaternion(keys: []const QuaternionKey, ratio: f32, cache: *u32, fallback: math.Quaternion, forward: bool) math.Quaternion {
+fn sampleQuaternion(
+    keys: []const QuaternionKey,
+    ratio: f32,
+    cache: *u32,
+    fallback: math.Quaternion,
+    forward: bool,
+    seed: u32,
+) math.Quaternion {
     if (keys.len == 0) return fallback;
     if (keys.len == 1 or ratio <= keys[0].ratio) return keys[0].value;
     if (ratio >= keys[keys.len - 1].ratio) return keys[keys.len - 1].value;
-    const i = keyIndex(QuaternionKey, keys, ratio, cache, forward);
+    const i = keyIndex(QuaternionKey, keys, ratio, cache, forward, seed);
     const a = keys[i];
     const b = keys[i + 1];
     const alpha = (ratio - a.ratio) / (b.ratio - a.ratio);
@@ -315,10 +454,50 @@ pub fn sample(
 
     for (animation.tracks, 0..) |track, i| {
         const fallback = math.Transform.identity;
+        const iframe = if (animation.iframes.len == animation.tracks.len)
+            animation.iframes[i]
+        else
+            TrackIframes{};
+        const iframe_index = if (!forward and animation.iframe_interval != null)
+            @as(usize, @intFromFloat(@floor(
+                ratio * animation.duration / animation.iframe_interval.?,
+            )))
+        else
+            0;
         const sampled: math.Transform = .{
-            .translation = sampleFloat3(track.translations, ratio, &context.translation_keys[i], fallback.translation, forward),
-            .rotation = sampleQuaternion(track.rotations, ratio, &context.rotation_keys[i], fallback.rotation, forward),
-            .scale = sampleFloat3(track.scales, ratio, &context.scale_keys[i], fallback.scale, forward),
+            .translation = sampleFloat3(
+                track.translations,
+                ratio,
+                &context.translation_keys[i],
+                fallback.translation,
+                forward,
+                if (iframe.translations.len == 0)
+                    0
+                else
+                    iframe.translations[@min(iframe_index, iframe.translations.len - 1)],
+            ),
+            .rotation = sampleQuaternion(
+                track.rotations,
+                ratio,
+                &context.rotation_keys[i],
+                fallback.rotation,
+                forward,
+                if (iframe.rotations.len == 0)
+                    0
+                else
+                    iframe.rotations[@min(iframe_index, iframe.rotations.len - 1)],
+            ),
+            .scale = sampleFloat3(
+                track.scales,
+                ratio,
+                &context.scale_keys[i],
+                fallback.scale,
+                forward,
+                if (iframe.scales.len == 0)
+                    0
+                else
+                    iframe.scales[@min(iframe_index, iframe.scales.len - 1)],
+            ),
         };
         math.setSoaLane(&output[i / 4], i % 4, sampled);
     }
@@ -431,8 +610,8 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
     for (options.rest_pose, 0..) |rest_soa, soa_i| {
         for (0..4) |lane| {
             const rest = math.soaLane(rest_soa, lane);
-            var translation = math.Float3.zero;
-            var scale = math.Float3.zero;
+            var translation = @as(math.Vec3f32, @splat(0));
+            var scale = @as(math.Vec3f32, @splat(0));
             var rotation: math.Quaternion = .{ .x = 0, .y = 0, .z = 0, .w = 0 };
             var total: f32 = 0;
             for (options.layers) |layer| {
@@ -440,8 +619,8 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                 if (layer.joint_weights) |jw| weight *= @max(math.lane(jw[soa_i], lane), 0);
                 if (weight == 0) continue;
                 const t = math.soaLane(layer.transforms[soa_i], lane);
-                translation = math.Float3.add(translation, math.Float3.scale(t.translation, weight));
-                scale = math.Float3.add(scale, math.Float3.scale(t.scale, weight));
+                translation = math.vec.add(translation, math.vec.scale(t.translation, weight));
+                scale = math.vec.add(scale, math.vec.scale(t.scale, weight));
                 var q = t.rotation;
                 if (total > 0 and math.Quaternion.dot(rotation, q) < 0) {
                     q = .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w };
@@ -454,8 +633,8 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
             }
             if (total < options.threshold) {
                 const rest_weight = options.threshold - total;
-                translation = math.Float3.add(translation, math.Float3.scale(rest.translation, rest_weight));
-                scale = math.Float3.add(scale, math.Float3.scale(rest.scale, rest_weight));
+                translation = math.vec.add(translation, math.vec.scale(rest.translation, rest_weight));
+                scale = math.vec.add(scale, math.vec.scale(rest.scale, rest_weight));
                 rotation.x += rest.rotation.x * rest_weight;
                 rotation.y += rest.rotation.y * rest_weight;
                 rotation.z += rest.rotation.z * rest_weight;
@@ -463,31 +642,34 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                 total = options.threshold;
             }
             var result: math.Transform = .{
-                .translation = math.Float3.scale(translation, 1 / total),
+                .translation = math.vec.scale(translation, 1 / total),
                 .rotation = math.Quaternion.normalize(rotation),
-                .scale = math.Float3.scale(scale, 1 / total),
+                .scale = math.vec.scale(scale, 1 / total),
             };
             for (options.additive_layers) |layer| {
                 var weight = layer.weight;
                 if (layer.joint_weights) |jw| weight *= @max(math.lane(jw[soa_i], lane), 0);
                 if (weight == 0) continue;
                 const add = math.soaLane(layer.transforms[soa_i], lane);
-                result.translation = math.Float3.add(result.translation, math.Float3.scale(add.translation, weight));
+                result.translation = math.vec.add(result.translation, math.vec.scale(add.translation, weight));
                 if (weight > 0) {
-                    result.scale = math.Float3.mul(result.scale, math.Float3.lerp(.one, add.scale, weight));
+                    result.scale = math.vec.mul(
+                        result.scale,
+                        math.approx.lerp_exact(@as(math.Vec3f32, @splat(1)), add.scale, weight),
+                    );
                     result.rotation = math.Quaternion.mul(
                         result.rotation,
                         math.Quaternion.nlerp(.identity, add.rotation, weight),
                     );
                 } else {
-                    const reciprocal_scale: math.Float3 = .{
-                        .x = if (add.scale.x != 0) 1 / add.scale.x else 0,
-                        .y = if (add.scale.y != 0) 1 / add.scale.y else 0,
-                        .z = if (add.scale.z != 0) 1 / add.scale.z else 0,
+                    const reciprocal_scale: math.Vec3f32 = .{
+                        if (add.scale[0] != 0) 1 / add.scale[0] else 0,
+                        if (add.scale[1] != 0) 1 / add.scale[1] else 0,
+                        if (add.scale[2] != 0) 1 / add.scale[2] else 0,
                     };
-                    result.scale = math.Float3.mul(
+                    result.scale = math.vec.mul(
                         result.scale,
-                        math.Float3.lerp(.one, reciprocal_scale, -weight),
+                        math.approx.lerp_exact(@as(math.Vec3f32, @splat(1)), reciprocal_scale, -weight),
                     );
                     result.rotation = math.Quaternion.mul(
                         result.rotation,
@@ -617,16 +799,16 @@ fn trackIdentity(comptime T: type) T {
 
 fn interpolate(comptime T: type, a: T, b: T, t: f32) T {
     if (T == f32) return a + (b - a) * t;
-    if (T == math.Float2) return math.Float2.lerp(a, b, t);
-    if (T == math.Float3) return math.Float3.lerp(a, b, t);
+    if (T == math.Vec2f32) return math.approx.lerp_exact(a, b, t);
+    if (T == math.Vec3f32) return math.approx.lerp_exact(a, b, t);
     if (T == math.Float4) return math.Float4.lerp(a, b, t);
     if (T == math.Quaternion) return math.Quaternion.nlerp(a, b, t);
     @compileError("unsupported track value type");
 }
 
 pub const FloatTrack = Track(f32);
-pub const Float2Track = Track(math.Float2);
-pub const Float3Track = Track(math.Float3);
+pub const Float2Track = Track(math.Vec2f32);
+pub const Float3Track = Track(math.Vec3f32);
 pub const Float4Track = Track(math.Float4);
 pub const QuaternionTrack = Track(math.Quaternion);
 
@@ -638,16 +820,16 @@ pub const MotionLayer = struct {
 pub fn blendMotion(layers: []const MotionLayer) math.Transform {
     var accumulated_weight: f32 = 0;
     var weighted_length: f32 = 0;
-    var direction = math.Float3.zero;
+    var direction = @as(math.Vec3f32, @splat(0));
     var rotation: math.Quaternion = .{ .x = 0, .y = 0, .z = 0, .w = 0 };
     for (layers) |layer| {
         if (layer.weight <= 0) continue;
-        const len = math.Float3.length(layer.delta.translation);
+        const len = math.vec.norm(layer.delta.translation);
         weighted_length += len * layer.weight;
         if (len > 0) {
-            direction = math.Float3.add(
+            direction = math.vec.add(
                 direction,
-                math.Float3.scale(layer.delta.translation, layer.weight / len),
+                math.vec.scale(layer.delta.translation, layer.weight / len),
             );
         }
         var q = layer.delta.rotation;
@@ -660,21 +842,21 @@ pub fn blendMotion(layers: []const MotionLayer) math.Transform {
         rotation.w += q.w * layer.weight;
         accumulated_weight += layer.weight;
     }
-    const denom = math.Float3.length(direction) * accumulated_weight;
+    const denom = math.vec.norm(direction) * accumulated_weight;
     return .{
-        .translation = if (denom > 0) math.Float3.scale(direction, weighted_length / denom) else .zero,
+        .translation = if (denom > 0) math.vec.scale(direction, weighted_length / denom) else @splat(0),
         .rotation = math.Quaternion.normalize(rotation),
-        .scale = .one,
+        .scale = @splat(1),
     };
 }
 
 pub const AimOptions = struct {
-    target: math.Float3,
+    target: math.Vec3f32,
     joint: math.Float4x4,
-    forward: math.Float3 = .x_axis,
-    offset: math.Float3 = .zero,
-    up: math.Float3 = .y_axis,
-    pole_vector: math.Float3 = .y_axis,
+    forward: math.Vec3f32 = .{ 1, 0, 0 },
+    offset: math.Vec3f32 = .{ 0, 0, 0 },
+    up: math.Vec3f32 = .{ 0, 1, 0 },
+    pole_vector: math.Vec3f32 = .{ 0, 1, 0 },
     twist_angle: f32 = 0,
     weight: f32 = 1,
 };
@@ -685,16 +867,16 @@ pub const AimResult = struct {
 };
 
 pub fn aimIk(options: AimOptions) !AimResult {
-    if (@abs(math.Float3.lengthSquared(options.forward) - 1) > 1e-3) {
+    if (@abs(math.vec.norm_sqr(options.forward) - 1) > 1e-3) {
         return Error.InvalidLayer;
     }
     const inverse = math.Float4x4.inverse(options.joint) orelse
         return .{ .correction = .identity, .reached = false };
     const target = math.Float4x4.transformPoint(inverse, options.target);
-    const forward_projection = math.Float3.dot(options.forward, options.offset);
-    const perpendicular_sq = math.Float3.lengthSquared(options.offset) -
+    const forward_projection = math.vec.dot(options.forward, options.offset);
+    const perpendicular_sq = math.vec.norm_sqr(options.offset) -
         forward_projection * forward_projection;
-    const target_sq = math.Float3.lengthSquared(target);
+    const target_sq = math.vec.norm_sqr(target);
     if (perpendicular_sq > target_sq) {
         return .{ .correction = .identity, .reached = false };
     }
@@ -703,27 +885,27 @@ pub fn aimIk(options: AimOptions) !AimResult {
     // but produces no correction.
     if (target_sq == 0) return .{ .correction = .identity, .reached = true };
     const intersection = @sqrt(@max(target_sq - perpendicular_sq, 0));
-    const offset_forward = math.Float3.add(
+    const offset_forward = math.vec.add(
         options.offset,
-        math.Float3.scale(options.forward, intersection - forward_projection),
+        math.vec.scale(options.forward, intersection - forward_projection),
     );
     const aim_rotation = math.Quaternion.fromTo(offset_forward, target);
     const corrected_up = math.Quaternion.rotate(aim_rotation, options.up);
     const pole_local = math.Float4x4.transformVector(inverse, options.pole_vector);
-    const axis = math.Float3.normalize(target);
-    const current_normal_raw = math.Float3.cross(corrected_up, axis);
-    const desired_normal_raw = math.Float3.cross(pole_local, axis);
-    const current_normal_sq = math.Float3.lengthSquared(current_normal_raw);
-    const desired_normal_sq = math.Float3.lengthSquared(desired_normal_raw);
+    const axis = math.vec.normalize(target);
+    const current_normal_raw = math.vec.cross(corrected_up, axis);
+    const desired_normal_raw = math.vec.cross(pole_local, axis);
+    const current_normal_sq = math.vec.norm_sqr(current_normal_raw);
+    const desired_normal_sq = math.vec.norm_sqr(desired_normal_raw);
     var plane_rotation = math.Quaternion.identity;
     if (current_normal_sq != 0 and desired_normal_sq != 0) {
         // Plane directions are meaningful at any non-zero magnitude. In
         // particular, ozz deliberately accepts very small up and pole vectors.
-        const current_normal = math.Float3.scale(current_normal_raw, 1 / @sqrt(current_normal_sq));
-        const desired_normal = math.Float3.scale(desired_normal_raw, 1 / @sqrt(desired_normal_sq));
-        const cosine = std.math.clamp(math.Float3.dot(current_normal, desired_normal), -1, 1);
+        const current_normal = math.vec.scale(current_normal_raw, 1 / @sqrt(current_normal_sq));
+        const desired_normal = math.vec.scale(desired_normal_raw, 1 / @sqrt(desired_normal_sq));
+        const cosine = std.math.clamp(math.vec.dot(current_normal, desired_normal), -1, 1);
         var angle = std.math.acos(cosine);
-        if (math.Float3.dot(math.Float3.cross(current_normal, desired_normal), axis) < 0) angle = -angle;
+        if (math.vec.dot(math.vec.cross(current_normal, desired_normal), axis) < 0) angle = -angle;
         plane_rotation = math.Quaternion.fromAxisAngle(axis, angle);
     }
     const twist = if (options.twist_angle != 0)
@@ -738,12 +920,12 @@ pub fn aimIk(options: AimOptions) !AimResult {
 }
 
 pub const TwoBoneOptions = struct {
-    target: math.Float3,
+    target: math.Vec3f32,
     start_joint: math.Float4x4,
     mid_joint: math.Float4x4,
     end_joint: math.Float4x4,
-    mid_axis: math.Float3 = .z_axis,
-    pole_vector: math.Float3 = .y_axis,
+    mid_axis: math.Vec3f32 = .{ 0, 0, 1 },
+    pole_vector: math.Vec3f32 = .{ 0, 1, 0 },
     twist_angle: f32 = 0,
     soften: f32 = 1,
     weight: f32 = 1,
@@ -756,7 +938,7 @@ pub const TwoBoneResult = struct {
 };
 
 pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
-    if (@abs(math.Float3.lengthSquared(options.mid_axis) - 1) > 1e-3) {
+    if (@abs(math.vec.norm_sqr(options.mid_axis) - 1) > 1e-3) {
         return Error.InvalidLayer;
     }
     const weight = std.math.clamp(options.weight, 0, 1);
@@ -770,13 +952,13 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     const start_position = math.Float4x4.translation(options.start_joint);
     const mid_position = math.Float4x4.translation(options.mid_joint);
     const end_position = math.Float4x4.translation(options.end_joint);
-    const start_mid_ms = math.Float3.scale(math.Float4x4.transformPoint(inv_mid, start_position), -1);
+    const start_mid_ms = math.vec.scale(math.Float4x4.transformPoint(inv_mid, start_position), -1);
     const mid_end_ms = math.Float4x4.transformPoint(inv_mid, end_position);
     const start_mid_ss = math.Float4x4.transformPoint(inv_start, mid_position);
     const end_ss = math.Float4x4.transformPoint(inv_start, end_position);
-    const mid_end_ss = math.Float3.sub(end_ss, start_mid_ss);
-    const l1_sq = math.Float3.lengthSquared(start_mid_ss);
-    const l2_sq = math.Float3.lengthSquared(mid_end_ss);
+    const mid_end_ss = math.vec.sub(end_ss, start_mid_ss);
+    const l1_sq = math.vec.norm_sqr(start_mid_ss);
+    const l2_sq = math.vec.norm_sqr(mid_end_ss);
     if (l1_sq <= math.epsilon or l2_sq <= math.epsilon) {
         return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
     }
@@ -788,14 +970,14 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     const soften_distance = chain_length * std.math.clamp(options.soften, 0, 1);
     const soften_range = chain_length - soften_distance;
     const original_target_ss = math.Float4x4.transformPoint(inv_start, options.target);
-    const original_target_length = math.Float3.length(original_target_ss);
+    const original_target_length = math.vec.norm(original_target_ss);
     var target_ss = original_target_ss;
     var target_length = original_target_length;
     if (original_target_length > soften_distance and original_target_length > 0 and soften_range > 0) {
         const alpha = (original_target_length - soften_distance) / soften_range;
         const ratio = 1 - 81 / std.math.pow(f32, alpha + 3, 4);
         target_length = soften_distance + soften_range * ratio;
-        target_ss = math.Float3.scale(original_target_ss, target_length / original_target_length);
+        target_ss = math.vec.scale(original_target_ss, target_length / original_target_length);
     }
     const reached = original_target_length <= soften_distance and original_target_length > minimum_length and weight >= 1;
 
@@ -805,12 +987,12 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
         1,
     );
     const initial_cos = std.math.clamp(
-        (l1_sq + l2_sq - math.Float3.lengthSquared(end_ss)) / (2 * l1 * l2),
+        (l1_sq + l2_sq - math.vec.norm_sqr(end_ss)) / (2 * l1 * l2),
         -1,
         1,
     );
-    const bent_reference = math.Float3.cross(start_mid_ms, options.mid_axis);
-    const initial_sign: f32 = if (math.Float3.dot(bent_reference, mid_end_ms) < 0) -1 else 1;
+    const bent_reference = math.vec.cross(start_mid_ms, options.mid_axis);
+    const initial_sign: f32 = if (math.vec.dot(bent_reference, mid_end_ms) < 0) -1 else 1;
     const initial_angle = std.math.acos(initial_cos) * initial_sign;
     const mid_full = math.Quaternion.fromAxisAngle(
         options.mid_axis,
@@ -820,29 +1002,29 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     const rotated_mid_end_ms = math.Quaternion.rotate(mid_full, mid_end_ms);
     const rotated_mid_end_model = math.Float4x4.transformVector(options.mid_joint, rotated_mid_end_ms);
     const rotated_mid_end_ss = math.Float4x4.transformVector(inv_start, rotated_mid_end_model);
-    const solved_end_ss = math.Float3.add(start_mid_ss, rotated_mid_end_ss);
+    const solved_end_ss = math.vec.add(start_mid_ss, rotated_mid_end_ss);
     const end_to_target = math.Quaternion.fromTo(solved_end_ss, target_ss);
     var start_full = end_to_target;
 
-    if (math.Float3.lengthSquared(target_ss) > math.epsilon) {
+    if (math.vec.norm_sqr(target_ss) > math.epsilon) {
         const pole_ss = math.Float4x4.transformVector(inv_start, options.pole_vector);
-        const reference_normal = math.Float3.cross(target_ss, pole_ss);
+        const reference_normal = math.vec.cross(target_ss, pole_ss);
         const mid_axis_model = math.Float4x4.transformVector(options.mid_joint, options.mid_axis);
         const mid_axis_ss = math.Float4x4.transformVector(inv_start, mid_axis_model);
         const joint_normal = math.Quaternion.rotate(end_to_target, mid_axis_ss);
-        if (math.Float3.lengthSquared(reference_normal) > math.epsilon and
-            math.Float3.lengthSquared(joint_normal) > math.epsilon)
+        if (math.vec.norm_sqr(reference_normal) > math.epsilon and
+            math.vec.norm_sqr(joint_normal) > math.epsilon)
         {
-            const reference_unit = math.Float3.normalize(reference_normal);
-            const joint_unit = math.Float3.normalize(joint_normal);
-            const cosine = std.math.clamp(math.Float3.dot(reference_unit, joint_unit), -1, 1);
-            var axis = math.Float3.normalize(target_ss);
-            if (math.Float3.dot(joint_normal, pole_ss) < 0) axis = math.Float3.scale(axis, -1);
+            const reference_unit = math.vec.normalize(reference_normal);
+            const joint_unit = math.vec.normalize(joint_normal);
+            const cosine = std.math.clamp(math.vec.dot(reference_unit, joint_unit), -1, 1);
+            var axis = math.vec.normalize(target_ss);
+            if (math.vec.dot(joint_normal, pole_ss) < 0) axis = math.vec.scale(axis, -1);
             const plane = math.Quaternion.fromAxisAngle(axis, std.math.acos(cosine));
             start_full = math.Quaternion.mul(plane, end_to_target);
         }
         if (options.twist_angle != 0) {
-            const twist = math.Quaternion.fromAxisAngle(math.Float3.normalize(target_ss), options.twist_angle);
+            const twist = math.Quaternion.fromAxisAngle(math.vec.normalize(target_ss), options.twist_angle);
             start_full = math.Quaternion.mul(twist, start_full);
         }
     }
@@ -922,7 +1104,7 @@ test "skeleton, sampling, blending, and local-to-model" {
     const allocator = std.testing.allocator;
     var skeleton = try Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = no_parent },
-        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ .x = 2 } } },
+        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ 2, 0, 0 } } },
     });
     defer skeleton.deinit();
     try std.testing.expectEqual(@as(?usize, 1), findJoint(skeleton, "child"));
@@ -930,8 +1112,8 @@ test "skeleton, sampling, blending, and local-to-model" {
     try std.testing.expectEqual(@as(usize, 2), subtreeEnd(skeleton, 0));
     var animation = try Animation.init(allocator, "move", 1, &.{
         .{ .translations = &.{
-            .{ .ratio = 0, .value = .zero },
-            .{ .ratio = 1, .value = .{ .x = 2 } },
+            .{ .ratio = 0, .value = @splat(0) },
+            .{ .ratio = 1, .value = .{ 2, 0, 0 } },
         } },
         .{},
     });
@@ -949,23 +1131,23 @@ test "skeleton, sampling, blending, and local-to-model" {
 
 test "motion blending, IK, and triggering" {
     const motion = blendMotion(&.{
-        .{ .delta = .{ .translation = .{ .x = 2 } }, .weight = 1 },
-        .{ .delta = .{ .translation = .{ .y = 2 } }, .weight = 1 },
+        .{ .delta = .{ .translation = .{ 2, 0, 0 } }, .weight = 1 },
+        .{ .delta = .{ .translation = .{ 0, 2, 0 } }, .weight = 1 },
     });
-    try std.testing.expectApproxEqAbs(@as(f32, 2), math.Float3.length(motion.translation), 1e-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), math.vec.norm(motion.translation), 1e-4);
 
     const aim = try aimIk(.{
-        .target = .{ .y = 1 },
+        .target = .{ 0, 1, 0 },
         .joint = .identity,
     });
-    const aimed = math.Quaternion.rotate(aim.correction, .x_axis);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), aimed.y, 1e-4);
+    const aimed = math.Quaternion.rotate(aim.correction, .{ 1, 0, 0 });
+    try std.testing.expectApproxEqAbs(@as(f32, 1), aimed[1], 1e-4);
 
     const two_bone = try twoBoneIk(.{
-        .target = .{ .x = 1, .y = 1 },
+        .target = .{ 1, 1, 0 },
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1 } }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 0, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
     });
     try std.testing.expect(two_bone.reached);
 
@@ -982,4 +1164,48 @@ test "motion blending, IK, and triggering" {
     try std.testing.expect(!falling.rising);
     try std.testing.expectApproxEqAbs(@as(f32, 0.25), rising.ratio, 1e-5);
     try std.testing.expectApproxEqAbs(@as(f32, 0.75), falling.ratio, 1e-5);
+}
+
+test "animation iframe checkpoints preserve random-seek results" {
+    const keys = [_]Float3Key{
+        .{ .ratio = 0, .value = .{ 0, 0, 0 } },
+        .{ .ratio = 0.2, .value = .{ 1, 0, 0 } },
+        .{ .ratio = 0.4, .value = .{ 2, 0, 0 } },
+        .{ .ratio = 0.6, .value = .{ 3, 0, 0 } },
+        .{ .ratio = 0.8, .value = .{ 4, 0, 0 } },
+        .{ .ratio = 1, .value = .{ 5, 0, 0 } },
+    };
+    var checkpointed = try Animation.initWithOptions(
+        std.testing.allocator,
+        "checkpointed",
+        10,
+        &.{.{ .translations = &keys }},
+        .{ .iframe_interval = 1 },
+    );
+    defer checkpointed.deinit();
+    var linear = try Animation.initWithOptions(
+        std.testing.allocator,
+        "linear",
+        10,
+        &.{.{ .translations = &keys }},
+        .{ .iframe_interval = null },
+    );
+    defer linear.deinit();
+    try std.testing.expect(checkpointed.memorySize() > linear.memorySize());
+
+    var checkpoint_context = try SamplingContext.init(std.testing.allocator, 1);
+    defer checkpoint_context.deinit();
+    var linear_context = try SamplingContext.init(std.testing.allocator, 1);
+    defer linear_context.deinit();
+    var checkpoint_pose = [_]math.SoaTransform{math.SoaTransform.identity};
+    var linear_pose = [_]math.SoaTransform{math.SoaTransform.identity};
+    for ([_]f32{ 0.91, 0.13, 0.77, 0.31, 0.99, 0.01 }) |ratio| {
+        try sample(&checkpointed, ratio, &checkpoint_context, &checkpoint_pose);
+        try sample(&linear, ratio, &linear_context, &linear_pose);
+        try std.testing.expectApproxEqAbs(
+            math.lane(linear_pose[0].translation.x, 0),
+            math.lane(checkpoint_pose[0].translation.x, 0),
+            1e-6,
+        );
+    }
 }

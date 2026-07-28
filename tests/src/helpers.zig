@@ -7,10 +7,10 @@ pub fn expectFloat(expected: f32, actual: f32) !void {
     try std.testing.expectApproxEqAbs(expected, actual, epsilon);
 }
 
-pub fn expectFloat3(expected: ozz.math.Float3, actual: ozz.math.Float3) !void {
-    try expectFloat(expected.x, actual.x);
-    try expectFloat(expected.y, actual.y);
-    try expectFloat(expected.z, actual.z);
+pub fn expectFloat3(expected: ozz.math.Vec3f32, actual: ozz.math.Vec3f32) !void {
+    try expectFloat(expected[0], actual[0]);
+    try expectFloat(expected[1], actual[1]);
+    try expectFloat(expected[2], actual[2]);
 }
 
 pub fn expectQuaternion(expected: ozz.math.Quaternion, actual: ozz.math.Quaternion) !void {

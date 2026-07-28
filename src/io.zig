@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const math = @import("math.zig");
+const serialization = @import("serialization.zig");
 const animation = @import("animation.zig");
 const offline = @import("offline.zig");
 const geometry = @import("geometry.zig");
@@ -84,24 +85,22 @@ fn readF32(reader: *std.Io.Reader) !f32 {
     return @bitCast(try reader.takeInt(u32, .little));
 }
 
-fn writeFloat3(writer: *std.Io.Writer, value: math.Float3) !void {
-    try writeF32(writer, value.x);
-    try writeF32(writer, value.y);
-    try writeF32(writer, value.z);
+fn writeFloat3(writer: *std.Io.Writer, value: math.Vec3f32) !void {
+    try serialization.writeVec3f32(writer, value, .little);
 }
 
-fn readFloat3(reader: *std.Io.Reader) !math.Float3 {
-    return .{ .x = try readF32(reader), .y = try readF32(reader), .z = try readF32(reader) };
+fn readFloat3(reader: *std.Io.Reader) !math.Vec3f32 {
+    return serialization.readVec3f32(reader, .little);
 }
 
-fn writeQuaternion(writer: *std.Io.Writer, value: math.Quaternion) !void {
+fn writeXyzw(writer: *std.Io.Writer, value: anytype) !void {
     try writeF32(writer, value.x);
     try writeF32(writer, value.y);
     try writeF32(writer, value.z);
     try writeF32(writer, value.w);
 }
 
-fn readQuaternion(reader: *std.Io.Reader) !math.Quaternion {
+fn readXyzw(comptime T: type, reader: *std.Io.Reader) !T {
     return .{
         .x = try readF32(reader),
         .y = try readF32(reader),
@@ -112,14 +111,14 @@ fn readQuaternion(reader: *std.Io.Reader) !math.Quaternion {
 
 fn writeTransform(writer: *std.Io.Writer, value: math.Transform) !void {
     try writeFloat3(writer, value.translation);
-    try writeQuaternion(writer, value.rotation);
+    try writeXyzw(writer, value.rotation);
     try writeFloat3(writer, value.scale);
 }
 
 fn readTransform(reader: *std.Io.Reader) !math.Transform {
     return .{
         .translation = try readFloat3(reader),
-        .rotation = try readQuaternion(reader),
+        .rotation = try readXyzw(math.Quaternion, reader),
         .scale = try readFloat3(reader),
     };
 }
@@ -233,7 +232,7 @@ fn writeQuaternionKeys(writer: *std.Io.Writer, keys: []const animation.Quaternio
     try writer.writeInt(u32, @intCast(keys.len), .little);
     for (keys) |key| {
         try writeF32(writer, key.ratio);
-        try writeQuaternion(writer, key.value);
+        try writeXyzw(writer, key.value);
     }
 }
 
@@ -278,7 +277,9 @@ fn readQuaternionKeys(
     if (count > limits.max_collection_items) return Error.InvalidLength;
     const keys = try allocator.alloc(animation.QuaternionKey, count);
     errdefer allocator.free(keys);
-    for (keys) |*key| key.* = .{ .ratio = try readF32(reader), .value = try readQuaternion(reader) };
+    for (keys) |*key| {
+        key.* = .{ .ratio = try readF32(reader), .value = try readXyzw(math.Quaternion, reader) };
+    }
     return keys;
 }
 
@@ -332,8 +333,8 @@ pub fn readAnimation(
 
 fn trackKind(comptime T: type, raw: bool) ObjectKind {
     if (T == f32) return if (raw) .raw_float_track else .float_track;
-    if (T == math.Float2) return if (raw) .raw_float2_track else .float2_track;
-    if (T == math.Float3) return if (raw) .raw_float3_track else .float3_track;
+    if (T == math.Vec2f32) return if (raw) .raw_float2_track else .float2_track;
+    if (T == math.Vec3f32) return if (raw) .raw_float3_track else .float3_track;
     if (T == math.Float4) return if (raw) .raw_float4_track else .float4_track;
     if (T == math.Quaternion) return if (raw) .raw_quaternion_track else .quaternion_track;
     @compileError("unsupported track value type");
@@ -341,34 +342,21 @@ fn trackKind(comptime T: type, raw: bool) ObjectKind {
 
 fn writeValue(comptime T: type, writer: *std.Io.Writer, value: T) !void {
     if (T == f32) return writeF32(writer, value);
-    if (T == math.Float2) {
-        try writeF32(writer, value.x);
-        try writeF32(writer, value.y);
-        return;
-    }
-    if (T == math.Float3) return writeFloat3(writer, value);
+    if (T == math.Vec2f32) return serialization.writeVec2f32(writer, value, .little);
+    if (T == math.Vec3f32) return writeFloat3(writer, value);
     if (T == math.Float4) {
-        try writeF32(writer, value.x);
-        try writeF32(writer, value.y);
-        try writeF32(writer, value.z);
-        try writeF32(writer, value.w);
+        try writeXyzw(writer, value);
         return;
     }
-    if (T == math.Quaternion) return writeQuaternion(writer, value);
+    if (T == math.Quaternion) return writeXyzw(writer, value);
     @compileError("unsupported track value type");
 }
 
 fn readValue(comptime T: type, reader: *std.Io.Reader) !T {
     if (T == f32) return readF32(reader);
-    if (T == math.Float2) return .{ .x = try readF32(reader), .y = try readF32(reader) };
-    if (T == math.Float3) return readFloat3(reader);
-    if (T == math.Float4) return .{
-        .x = try readF32(reader),
-        .y = try readF32(reader),
-        .z = try readF32(reader),
-        .w = try readF32(reader),
-    };
-    if (T == math.Quaternion) return readQuaternion(reader);
+    if (T == math.Vec2f32) return serialization.readVec2f32(reader, .little);
+    if (T == math.Vec3f32) return readFloat3(reader);
+    if (T == math.Float4 or T == math.Quaternion) return readXyzw(T, reader);
     @compileError("unsupported track value type");
 }
 
@@ -608,7 +596,7 @@ fn writeTimedQuaternion(writer: *std.Io.Writer, keys: []const offline.RotationKe
     try writer.writeInt(u32, @intCast(keys.len), .little);
     for (keys) |key| {
         try writeF32(writer, key.time);
-        try writeQuaternion(writer, key.value);
+        try writeXyzw(writer, key.value);
     }
 }
 
@@ -654,7 +642,9 @@ fn readTimedQuaternion(
     if (count > limits.max_collection_items) return Error.InvalidLength;
     const keys = try allocator.alloc(offline.RotationKey, count);
     errdefer allocator.free(keys);
-    for (keys) |*key| key.* = .{ .time = try readF32(reader), .value = try readQuaternion(reader) };
+    for (keys) |*key| {
+        key.* = .{ .time = try readF32(reader), .value = try readXyzw(math.Quaternion, reader) };
+    }
     return keys;
 }
 
@@ -773,7 +763,7 @@ test "native skeleton and animation round trip" {
     const allocator = std.testing.allocator;
     var skeleton = try animation.Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = animation.no_parent },
-        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ .y = 2 } } },
+        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ 0, 2, 0 } } },
     });
     defer skeleton.deinit();
     var bytes: std.Io.Writer.Allocating = .init(allocator);
@@ -787,8 +777,8 @@ test "native skeleton and animation round trip" {
 
     var value = try animation.Animation.init(allocator, "clip", 2, &.{
         .{ .translations = &.{
-            .{ .ratio = 0, .value = .zero },
-            .{ .ratio = 1, .value = .{ .x = 3 } },
+            .{ .ratio = 0, .value = @splat(0) },
+            .{ .ratio = 1, .value = .{ 3, 0, 0 } },
         } },
     });
     defer value.deinit();
@@ -802,21 +792,21 @@ test "native skeleton and animation round trip" {
     try std.testing.expectEqual(@as(usize, 2), loaded_animation.tracks[0].translations.len);
 
     var track = try animation.Float3Track.init(allocator, "position", &.{
-        .{ .ratio = 0, .value = .zero },
-        .{ .ratio = 0.5, .value = .{ .z = 4 } },
-        .{ .ratio = 1, .value = .zero },
+        .{ .ratio = 0, .value = @splat(0) },
+        .{ .ratio = 0.5, .value = .{ 0, 0, 4 } },
+        .{ .ratio = 1, .value = @splat(0) },
     }, .linear);
     track.keys[1].interpolation = .step;
     defer track.deinit();
     var track_bytes: std.Io.Writer.Allocating = .init(allocator);
     defer track_bytes.deinit();
-    try writeTrack(math.Float3, allocator, &track_bytes.writer, track);
+    try writeTrack(math.Vec3f32, allocator, &track_bytes.writer, track);
     var track_reader = std.Io.Reader.fixed(track_bytes.writer.buffered());
-    var loaded_track = try readTrack(math.Float3, allocator, &track_reader, .{});
+    var loaded_track = try readTrack(math.Vec3f32, allocator, &track_reader, .{});
     defer loaded_track.deinit();
     try std.testing.expectEqualStrings("position", loaded_track.name);
     try std.testing.expectEqual(animation.Interpolation.step, loaded_track.keys[1].interpolation);
-    try std.testing.expectEqual(@as(f32, 4), loaded_track.sampleAt(0.75).z);
+    try std.testing.expectEqual(@as(f32, 4), loaded_track.sampleAt(0.75)[2]);
 
     var raw_track = try offline.RawFloatTrack.init(allocator, "raw", &.{
         .{ .interpolation = .linear, .ratio = 0, .value = 1 },
@@ -834,8 +824,8 @@ test "native skeleton and animation round trip" {
     var raw_animation = try offline.RawAnimation.init(allocator, "source", 1, 1);
     defer raw_animation.deinit();
     raw_animation.tracks[0].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 1, .value = .{ .x = 2 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 1, .value = .{ 2, 0, 0 } },
     });
     var raw_animation_bytes: std.Io.Writer.Allocating = .init(allocator);
     defer raw_animation_bytes.deinit();
@@ -843,7 +833,7 @@ test "native skeleton and animation round trip" {
     var raw_animation_reader = std.Io.Reader.fixed(raw_animation_bytes.writer.buffered());
     var loaded_raw_animation = try readRawAnimation(allocator, &raw_animation_reader, .{});
     defer loaded_raw_animation.deinit();
-    try std.testing.expectEqual(@as(f32, 2), loaded_raw_animation.tracks[0].translations[1].value.x);
+    try std.testing.expectEqual(@as(f32, 2), loaded_raw_animation.tracks[0].translations[1].value[0]);
 
     const roots = try allocator.alloc(offline.RawJoint, 1);
     roots[0] = .{

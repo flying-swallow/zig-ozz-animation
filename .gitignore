@@ -3,3 +3,10 @@
 /zig-pkg/
 /tests/.zig-cache/
 /tests/zig-pkg/
+/bench/.zig-cache/
+/bench/zig-out/
+/bench/zig-pkg/
+/samples/.zig-cache/
+/samples/zig-out/
+/samples/zig-pkg/
+/samples/imgui.ini

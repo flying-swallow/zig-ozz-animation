@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const math = @import("math.zig");
+const serialization = @import("serialization.zig");
 const animation = @import("animation.zig");
 const offline = @import("offline.zig");
 const geometry = @import("geometry.zig");
@@ -105,45 +106,65 @@ pub fn detect(bytes: []const u8) Error!Kind {
 }
 
 const Reader = struct {
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     pos: usize = 0,
     endian: std.builtin.Endian,
     limits: Limits,
 
-    fn init(bytes: []const u8, limits: Limits) Error!Reader {
-        if (bytes.len == 0) return Error.TruncatedArchive;
-        const endian: std.builtin.Endian = switch (bytes[0]) {
+    fn init(stream: *std.Io.Reader, limits: Limits) !Reader {
+        const endian_byte = stream.takeByte() catch |err| switch (err) {
+            error.EndOfStream => return Error.TruncatedArchive,
+            else => |e| return e,
+        };
+        const endian: std.builtin.Endian = switch (endian_byte) {
             0 => .big,
             1 => .little,
             else => return Error.InvalidEndian,
         };
-        return .{ .bytes = bytes, .pos = 1, .endian = endian, .limits = limits };
+        return .{ .stream = stream, .pos = 1, .endian = endian, .limits = limits };
     }
 
-    fn take(self: *Reader, byte_count: usize) Error![]const u8 {
-        if (byte_count > self.bytes.len -| self.pos) return Error.TruncatedArchive;
-        const result = self.bytes[self.pos..][0..byte_count];
-        self.pos += byte_count;
+    fn readAll(self: *Reader, bytes: []u8) !void {
+        self.stream.readSliceAll(bytes) catch |err| switch (err) {
+            error.EndOfStream => return Error.TruncatedArchive,
+            else => |e| return e,
+        };
+        self.pos += bytes.len;
+    }
+
+    fn readAlloc(self: *Reader, allocator: std.mem.Allocator, byte_count: usize) ![]u8 {
+        const result = try allocator.alloc(u8, byte_count);
+        errdefer allocator.free(result);
+        try self.readAll(result);
         return result;
     }
 
-    fn expectTag(self: *Reader, expected: []const u8) Error!void {
-        if (!std.mem.eql(u8, try self.take(expected.len), expected)) return Error.UnexpectedTag;
-    }
-
-    fn int(self: *Reader, comptime T: type) Error!T {
-        const bytes = try self.take(@sizeOf(T));
-        return switch (self.endian) {
-            .little => std.mem.readInt(T, bytes[0..@sizeOf(T)], .little),
-            .big => std.mem.readInt(T, bytes[0..@sizeOf(T)], .big),
+    fn discard(self: *Reader, byte_count: usize) !void {
+        self.stream.discardAll(byte_count) catch |err| switch (err) {
+            error.EndOfStream => return Error.TruncatedArchive,
+            else => |e| return e,
         };
+        self.pos += byte_count;
     }
 
-    fn float(self: *Reader) Error!f32 {
+    fn expectTag(self: *Reader, expected: []const u8) !void {
+        var actual: [32]u8 = undefined;
+        std.debug.assert(expected.len <= actual.len);
+        try self.readAll(actual[0..expected.len]);
+        if (!std.mem.eql(u8, actual[0..expected.len], expected)) return Error.UnexpectedTag;
+    }
+
+    fn int(self: *Reader, comptime T: type) !T {
+        var bytes: [@sizeOf(T)]u8 = undefined;
+        try self.readAll(&bytes);
+        return std.mem.readInt(T, &bytes, self.endian);
+    }
+
+    fn float(self: *Reader) !f32 {
         return @bitCast(try self.int(u32));
     }
 
-    fn count(self: *Reader) Error!usize {
+    fn count(self: *Reader) !usize {
         const value = try self.int(u32);
         if (value > self.limits.max_collection_items) return Error.InvalidLength;
         return value;
@@ -152,11 +173,15 @@ const Reader = struct {
     fn string(self: *Reader, allocator: std.mem.Allocator) ![]u8 {
         const len = try self.int(u32);
         if (len > self.limits.max_string_bytes) return Error.InvalidLength;
-        return allocator.dupe(u8, try self.take(len));
+        return self.readAlloc(allocator, len);
     }
 
-    fn finish(self: Reader) Error!void {
-        if (self.pos != self.bytes.len) return Error.TrailingData;
+    fn finish(self: *Reader) !void {
+        _ = self.stream.peekByte() catch |err| switch (err) {
+            error.EndOfStream => return,
+            else => |e| return e,
+        };
+        return Error.TrailingData;
     }
 };
 
@@ -216,15 +241,7 @@ pub fn writeSkeleton(
     }
 }
 
-fn readFloat2(reader: *Reader) !math.Float2 {
-    return .{ .x = try reader.float(), .y = try reader.float() };
-}
-
-fn readFloat3(reader: *Reader) !math.Float3 {
-    return .{ .x = try reader.float(), .y = try reader.float(), .z = try reader.float() };
-}
-
-fn readFloat4(reader: *Reader) !math.Float4 {
+fn readXyzw(comptime T: type, reader: *Reader) !T {
     return .{
         .x = try reader.float(),
         .y = try reader.float(),
@@ -233,20 +250,29 @@ fn readFloat4(reader: *Reader) !math.Float4 {
     };
 }
 
-fn readQuaternion(reader: *Reader) !math.Quaternion {
-    return .{
-        .x = try reader.float(),
-        .y = try reader.float(),
-        .z = try reader.float(),
-        .w = try reader.float(),
+fn readVec2f32(reader: *Reader) !math.Vec2f32 {
+    const value = serialization.readVec2f32(reader.stream, reader.endian) catch |err| switch (err) {
+        error.EndOfStream => return Error.TruncatedArchive,
+        else => |e| return e,
     };
+    reader.pos += 2 * @sizeOf(f32);
+    return value;
+}
+
+fn readVec3f32(reader: *Reader) !math.Vec3f32 {
+    const value = serialization.readVec3f32(reader.stream, reader.endian) catch |err| switch (err) {
+        error.EndOfStream => return Error.TruncatedArchive,
+        else => |e| return e,
+    };
+    reader.pos += 3 * @sizeOf(f32);
+    return value;
 }
 
 fn readTransform(reader: *Reader) !math.Transform {
     return .{
-        .translation = try readFloat3(reader),
-        .rotation = try readQuaternion(reader),
-        .scale = try readFloat3(reader),
+        .translation = try readVec3f32(reader),
+        .rotation = try readXyzw(math.Quaternion, reader),
+        .scale = try readVec3f32(reader),
     };
 }
 
@@ -256,12 +282,12 @@ fn expectVersion(reader: *Reader, expected: u32) !void {
 
 pub fn readSkeleton(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !animation.Skeleton {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag("ozz-skeleton\x00");
-    try expectVersion(&reader, 2);
+    if (try reader.int(u32) != 2) return Error.UnsupportedVersion;
     const signed_count = try reader.int(i32);
     if (signed_count < 0 or signed_count > animation.max_joints) return Error.InvalidLength;
     const count: usize = @intCast(signed_count);
@@ -271,7 +297,9 @@ pub fn readSkeleton(
     }
     const chars_count = try reader.int(i32);
     if (chars_count <= 0 or chars_count > limits.max_string_bytes) return Error.InvalidLength;
-    const names_blob = try reader.take(@intCast(chars_count));
+    const names_blob = try allocator.alloc(u8, @intCast(chars_count));
+    defer allocator.free(names_blob);
+    try reader.readAll(names_blob);
 
     const inputs = try allocator.alloc(animation.JointInput, count);
     defer allocator.free(inputs);
@@ -293,14 +321,14 @@ pub fn readSkeleton(
             const index = group * 4 + lane;
             if (index >= count) break;
             inputs[index].rest_pose = .{
-                .translation = .{ .x = values[lane], .y = values[4 + lane], .z = values[8 + lane] },
+                .translation = .{ values[lane], values[4 + lane], values[8 + lane] },
                 .rotation = .{
                     .x = values[12 + lane],
                     .y = values[16 + lane],
                     .z = values[20 + lane],
                     .w = values[24 + lane],
                 },
-                .scale = .{ .x = values[28 + lane], .y = values[32 + lane], .z = values[36 + lane] },
+                .scale = .{ values[28 + lane], values[32 + lane], values[36 + lane] },
             };
         }
     }
@@ -338,7 +366,7 @@ fn readCtrl(
     const previouses = try allocator.alloc(u16, key_count);
     errdefer allocator.free(previouses);
     for (previouses) |*previous| previous.* = try reader.int(u16);
-    _ = try reader.take(iframe_entries_count);
+    try reader.discard(iframe_entries_count);
     for (0..iframe_desc_count) |_| _ = try reader.int(u32);
     _ = try reader.float();
     return .{
@@ -429,9 +457,9 @@ fn decodeFloat3Tracks(
             key.* = .{
                 .ratio = try timeRatio(ctrl, timepoints, index),
                 .value = .{
-                    .x = halfToFloat(values[index][0]),
-                    .y = halfToFloat(values[index][1]),
-                    .z = halfToFloat(values[index][2]),
+                    halfToFloat(values[index][0]),
+                    halfToFloat(values[index][1]),
+                    halfToFloat(values[index][2]),
                 },
             };
             if (key_index + 1 < keys.len) {
@@ -491,10 +519,10 @@ fn readPacked3(allocator: std.mem.Allocator, reader: *Reader, count: usize) ![][
 
 pub fn readAnimation(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !animation.Animation {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag("ozz-animation\x00");
     try expectVersion(&reader, 7);
     const duration = try reader.float();
@@ -512,7 +540,8 @@ pub fn readAnimation(
     const r_iframe_desc = try reader.count();
     const s_iframe_entries = try reader.count();
     const s_iframe_desc = try reader.count();
-    const name = try reader.take(name_len);
+    const name = try reader.readAlloc(allocator, name_len);
+    defer allocator.free(name);
     const timepoints = try allocator.alloc(f32, timepoint_count);
     defer allocator.free(timepoints);
     for (timepoints) |*timepoint| timepoint.* = try reader.float();
@@ -623,10 +652,10 @@ fn deinitRawJoint(allocator: std.mem.Allocator, joint: *offline.RawJoint) void {
 
 pub fn readRawSkeleton(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !offline.RawSkeleton {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag("ozz-raw_skeleton\x00");
     try expectVersion(&reader, 1);
     const root_count = try reader.count();
@@ -645,8 +674,9 @@ pub fn readRawSkeleton(
     return .{ .allocator = allocator, .roots = roots };
 }
 
-fn readTimedFloat3(
+fn readTimedValues(
     comptime Key: type,
+    comptime Value: type,
     allocator: std.mem.Allocator,
     reader: *Reader,
 ) ![]Key {
@@ -654,28 +684,18 @@ fn readTimedFloat3(
     const result = try allocator.alloc(Key, count);
     errdefer allocator.free(result);
     if (count > 0) try expectVersion(reader, 1);
-    for (result) |*key| key.* = .{ .time = try reader.float(), .value = try readFloat3(reader) };
-    return result;
-}
-
-fn readTimedQuaternion(
-    allocator: std.mem.Allocator,
-    reader: *Reader,
-) ![]offline.RotationKey {
-    const count = try reader.count();
-    const result = try allocator.alloc(offline.RotationKey, count);
-    errdefer allocator.free(result);
-    if (count > 0) try expectVersion(reader, 1);
-    for (result) |*key| key.* = .{ .time = try reader.float(), .value = try readQuaternion(reader) };
+    for (result) |*key| {
+        key.* = .{ .time = try reader.float(), .value = try readValue(Value, reader) };
+    }
     return result;
 }
 
 pub fn readRawAnimation(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !offline.RawAnimation {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag("ozz-raw_animation\x00");
     try expectVersion(&reader, 3);
     const duration = try reader.float();
@@ -685,9 +705,24 @@ pub fn readRawAnimation(
     errdefer result.deinit();
     if (track_count > 0) try expectVersion(&reader, 1);
     for (result.tracks) |*track| {
-        track.translations = try readTimedFloat3(offline.TranslationKey, allocator, &reader);
-        track.rotations = try readTimedQuaternion(allocator, &reader);
-        track.scales = try readTimedFloat3(offline.ScaleKey, allocator, &reader);
+        track.translations = try readTimedValues(
+            offline.TranslationKey,
+            math.Vec3f32,
+            allocator,
+            &reader,
+        );
+        track.rotations = try readTimedValues(
+            offline.RotationKey,
+            math.Quaternion,
+            allocator,
+            &reader,
+        );
+        track.scales = try readTimedValues(
+            offline.ScaleKey,
+            math.Vec3f32,
+            allocator,
+            &reader,
+        );
     }
     const name = try reader.string(allocator);
     allocator.free(result.name);
@@ -699,8 +734,8 @@ pub fn readRawAnimation(
 
 fn valueTag(comptime T: type, raw: bool) []const u8 {
     if (T == f32) return if (raw) "ozz-raw_float_track\x00" else "ozz-float_track\x00";
-    if (T == math.Float2) return if (raw) "ozz-raw_float2_track\x00" else "ozz-float2_track\x00";
-    if (T == math.Float3) return if (raw) "ozz-raw_float3_track\x00" else "ozz-float3_track\x00";
+    if (T == math.Vec2f32) return if (raw) "ozz-raw_float2_track\x00" else "ozz-float2_track\x00";
+    if (T == math.Vec3f32) return if (raw) "ozz-raw_float3_track\x00" else "ozz-float3_track\x00";
     if (T == math.Float4) return if (raw) "ozz-raw_float4_track\x00" else "ozz-float4_track\x00";
     if (T == math.Quaternion) return if (raw) "ozz-raw_quat_track\x00" else "ozz-quat_track\x00";
     @compileError("unsupported track value");
@@ -708,23 +743,22 @@ fn valueTag(comptime T: type, raw: bool) []const u8 {
 
 fn readValue(comptime T: type, reader: *Reader) !T {
     if (T == f32) return reader.float();
-    if (T == math.Float2) return readFloat2(reader);
-    if (T == math.Float3) return readFloat3(reader);
-    if (T == math.Float4) return readFloat4(reader);
-    if (T == math.Quaternion) return readQuaternion(reader);
+    if (T == math.Vec2f32) return readVec2f32(reader);
+    if (T == math.Vec3f32) return readVec3f32(reader);
+    if (T == math.Float4 or T == math.Quaternion) return readXyzw(T, reader);
     @compileError("unsupported track value");
 }
 
 pub fn readTrack(
     comptime T: type,
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !animation.Track(T) {
-    var consumed: usize = 0;
-    var result = try readTrackPrefix(T, allocator, bytes, limits, &consumed);
+    var reader = try Reader.init(stream, limits);
+    var result = try readTrackBody(T, allocator, &reader);
     errdefer result.deinit();
-    if (consumed != bytes.len) return Error.TrailingData;
+    try reader.finish();
     return result;
 }
 
@@ -733,41 +767,53 @@ pub fn readTrack(
 pub fn readTrackPrefix(
     comptime T: type,
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
     consumed: *usize,
 ) !animation.Track(T) {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
+    const result = try readTrackBody(T, allocator, &reader);
+    consumed.* = reader.pos;
+    return result;
+}
+
+fn readTrackBody(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    reader: *Reader,
+) !animation.Track(T) {
     try reader.expectTag(valueTag(T, false));
-    try expectVersion(&reader, 1);
+    try expectVersion(reader, 1);
     const count = try reader.count();
     const signed_name_len = try reader.int(i32);
-    if (signed_name_len < 0 or signed_name_len > limits.max_string_bytes) return Error.InvalidLength;
+    if (signed_name_len < 0 or signed_name_len > reader.limits.max_string_bytes) {
+        return Error.InvalidLength;
+    }
     const Key = animation.Track(T).Key;
     const keys = try allocator.alloc(Key, count);
     defer allocator.free(keys);
     for (keys) |*key| key.ratio = try reader.float();
-    for (keys) |*key| key.value = try readValue(T, &reader);
-    const step_bytes = try reader.take((count + 7) / 8);
+    for (keys) |*key| key.value = try readValue(T, reader);
+    const step_bytes = try reader.readAlloc(allocator, (count + 7) / 8);
+    defer allocator.free(step_bytes);
     for (keys, 0..) |*key, i| {
         key.interpolation = if (step_bytes[i / 8] & (@as(u8, 1) << @intCast(i & 7)) != 0)
             .step
         else
             .linear;
     }
-    const name = try reader.take(@intCast(signed_name_len));
-    const result = try animation.Track(T).initMixed(allocator, name, keys);
-    consumed.* = reader.pos;
-    return result;
+    const name = try reader.readAlloc(allocator, @intCast(signed_name_len));
+    defer allocator.free(name);
+    return animation.Track(T).initMixed(allocator, name, keys);
 }
 
 pub fn readRawTrack(
     comptime T: type,
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !offline.RawTrack(T) {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag(valueTag(T, true));
     try expectVersion(&reader, 1);
     const count = try reader.count();
@@ -841,10 +887,10 @@ fn readMeshPartBody(allocator: std.mem.Allocator, reader: *Reader) !geometry.Mes
 
 pub fn readMeshPart(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !geometry.MeshPart {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
     try reader.expectTag("ozz-sample-Mesh-Part\x00");
     try expectVersion(&reader, 1);
     const part = try readMeshPartBody(allocator, &reader);
@@ -855,25 +901,34 @@ pub fn readMeshPart(
 
 pub fn readMesh(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
 ) !geometry.Mesh {
-    var consumed: usize = 0;
-    var result = try readMeshPrefix(allocator, bytes, limits, &consumed);
+    var reader = try Reader.init(stream, limits);
+    var result = try readMeshBody(allocator, &reader);
     errdefer result.deinit();
-    if (consumed != bytes.len) return Error.TrailingData;
+    try reader.finish();
     return result;
 }
 
 pub fn readMeshPrefix(
     allocator: std.mem.Allocator,
-    bytes: []const u8,
+    stream: *std.Io.Reader,
     limits: Limits,
     consumed: *usize,
 ) !geometry.Mesh {
-    var reader = try Reader.init(bytes, limits);
+    var reader = try Reader.init(stream, limits);
+    const result = try readMeshBody(allocator, &reader);
+    consumed.* = reader.pos;
+    return result;
+}
+
+fn readMeshBody(
+    allocator: std.mem.Allocator,
+    reader: *Reader,
+) !geometry.Mesh {
     try reader.expectTag("ozz-sample-Mesh\x00");
-    try expectVersion(&reader, 1);
+    try expectVersion(reader, 1);
     const part_count = try reader.count();
     const parts = try allocator.alloc(geometry.MeshPart, part_count);
     @memset(parts, .{});
@@ -882,14 +937,14 @@ pub fn readMeshPrefix(
         for (parts[0..initialized]) |part| deinitMeshPart(allocator, part);
         allocator.free(parts);
     }
-    if (part_count > 0) try expectVersion(&reader, 1);
+    if (part_count > 0) try expectVersion(reader, 1);
     for (parts) |*part| {
-        part.* = try readMeshPartBody(allocator, &reader);
+        part.* = try readMeshPartBody(allocator, reader);
         initialized += 1;
     }
-    const triangle_indices = try readLegacySlice(u16, allocator, &reader);
+    const triangle_indices = try readLegacySlice(u16, allocator, reader);
     errdefer allocator.free(triangle_indices);
-    const joint_remaps = try readLegacySlice(u16, allocator, &reader);
+    const joint_remaps = try readLegacySlice(u16, allocator, reader);
     errdefer allocator.free(joint_remaps);
     const matrix_count = try reader.count();
     const matrices = try allocator.alloc(math.Float4x4, matrix_count);
@@ -904,7 +959,6 @@ pub fn readMeshPrefix(
         .joint_remaps = joint_remaps,
         .inverse_bind_poses = matrices,
     };
-    consumed.* = reader.pos;
     return result;
 }
 

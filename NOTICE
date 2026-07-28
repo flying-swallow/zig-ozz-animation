@@ -11,15 +11,28 @@ The math facade uses Caliper:
   Copyright (c) its contributors
   Licensed under the MIT License.
 
-The glTF importer uses flying-swallow/cglf, a Zig package wrapping cgltf:
+The glTF importer uses flying-swallow/zgltf:
 
-  https://github.com/flying-swallow/cglf
-  Wrapper licensed under GPL-2.0-only; vendored cgltf licensed under MIT.
+  https://github.com/flying-swallow/zgltf
+  Copyright (c) 2022 Alexandre Chêne
+  Licensed under the MIT License.
 
-The optional desktop sample direction follows rhi-zig:
+The standalone benchmark package uses zBench:
+
+  https://github.com/hendriknielaender/zBench
+  Copyright (c) its contributors
+  Licensed under the MIT License.
+
+The standalone desktop samples use rhi-zig:
 
   https://github.com/flying-swallow/rhi-zig
   Copyright (c) Michael Pollind
   Licensed under GPL-2.0-only.
+
+They use SDL:
+
+  https://github.com/castholm/SDL
+  Copyright (c) Sam Lantinga and SDL contributors
+  Licensed under the zlib License.
 
 No rhi-zig code is linked into the MIT-licensed core or command-line tool.

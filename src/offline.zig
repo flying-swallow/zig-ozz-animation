@@ -2,9 +2,9 @@ const std = @import("std");
 const math = @import("math.zig");
 const runtime = @import("animation.zig");
 
-pub const TranslationKey = struct { time: f32, value: math.Float3 };
+pub const TranslationKey = struct { time: f32, value: math.Vec3f32 };
 pub const RotationKey = struct { time: f32, value: math.Quaternion };
-pub const ScaleKey = struct { time: f32, value: math.Float3 };
+pub const ScaleKey = struct { time: f32, value: math.Vec3f32 };
 
 pub const RawJointTrack = struct {
     translations: []TranslationKey = &.{},
@@ -54,6 +54,17 @@ pub const RawAnimation = struct {
             }
         }
         return true;
+    }
+
+    pub fn memorySize(self: RawAnimation) usize {
+        var size = @sizeOf(RawAnimation) + self.name.len +
+            self.tracks.len * @sizeOf(RawJointTrack);
+        for (self.tracks) |track| {
+            size += track.translations.len * @sizeOf(TranslationKey);
+            size += track.rotations.len * @sizeOf(RotationKey);
+            size += track.scales.len * @sizeOf(ScaleKey);
+        }
+        return size;
     }
 };
 
@@ -160,6 +171,14 @@ fn flattenJoint(
 
 pub const AnimationBuilder = struct {
     pub fn build(allocator: std.mem.Allocator, raw: RawAnimation) !runtime.Animation {
+        return buildWithOptions(allocator, raw, .{});
+    }
+
+    pub fn buildWithOptions(
+        allocator: std.mem.Allocator,
+        raw: RawAnimation,
+        options: runtime.AnimationBuildOptions,
+    ) !runtime.Animation {
         if (!raw.validate()) return runtime.Error.InvalidKeyframe;
         var inputs = try allocator.alloc(runtime.JointTrackInput, raw.tracks.len);
         defer allocator.free(inputs);
@@ -222,7 +241,13 @@ pub const AnimationBuilder = struct {
                 .scales = scales.items[s_start..],
             };
         }
-        return runtime.Animation.init(allocator, raw.name, raw.duration, inputs);
+        return runtime.Animation.initWithOptions(
+            allocator,
+            raw.name,
+            raw.duration,
+            inputs,
+            options,
+        );
     }
 };
 
@@ -239,9 +264,9 @@ pub fn sampleJointTrack(track: RawJointTrack, time: f32) !math.Transform {
         return runtime.Error.InvalidKeyframe;
     }
     return .{
-        .translation = sampleTimed(math.Float3, TranslationKey, track.translations, time, .zero),
+        .translation = sampleTimed(math.Vec3f32, TranslationKey, track.translations, time, @splat(0)),
         .rotation = sampleTimed(math.Quaternion, RotationKey, track.rotations, time, .identity),
-        .scale = sampleTimed(math.Float3, ScaleKey, track.scales, time, .one),
+        .scale = sampleTimed(math.Vec3f32, ScaleKey, track.scales, time, @splat(1)),
     };
 }
 
@@ -268,7 +293,7 @@ fn sampleTimed(
     while (i + 1 < keys.len and keys[i + 1].time <= time) : (i += 1) {}
     const alpha = (time - keys[i].time) / (keys[i + 1].time - keys[i].time);
     if (T == math.Quaternion) return math.Quaternion.nlerp(keys[i].value, keys[i + 1].value, alpha);
-    return math.Float3.lerp(keys[i].value, keys[i + 1].value, alpha);
+    return math.approx.lerp_exact(keys[i].value, keys[i + 1].value, alpha);
 }
 
 pub fn sampleRawAnimation(raw: RawAnimation, time: f32, output: []math.Transform) !void {
@@ -368,15 +393,15 @@ pub fn RawTrack(comptime T: type) type {
 }
 
 pub const RawFloatTrack = RawTrack(f32);
-pub const RawFloat2Track = RawTrack(math.Float2);
-pub const RawFloat3Track = RawTrack(math.Float3);
+pub const RawFloat2Track = RawTrack(math.Vec2f32);
+pub const RawFloat3Track = RawTrack(math.Vec3f32);
 pub const RawFloat4Track = RawTrack(math.Float4);
 pub const RawQuaternionTrack = RawTrack(math.Quaternion);
 
 fn defaultTrackValue(comptime T: type) T {
     if (T == f32) return 0;
-    if (T == math.Float2) return .zero;
-    if (T == math.Float3) return .zero;
+    if (T == math.Vec2f32) return @splat(0);
+    if (T == math.Vec3f32) return @splat(0);
     if (T == math.Float4) return .zero;
     if (T == math.Quaternion) return .identity;
     @compileError("unsupported track value type");
@@ -469,12 +494,8 @@ pub fn buildTrack(
 
 fn valueDistance(comptime T: type, a: T, b: T) f32 {
     if (T == f32) return @abs(a - b);
-    if (T == math.Float2) {
-        const x = a.x - b.x;
-        const y = a.y - b.y;
-        return @sqrt(x * x + y * y);
-    }
-    if (T == math.Float3) return math.Float3.length(math.Float3.sub(a, b));
+    if (T == math.Vec2f32) return math.vec.norm(math.vec.sub(a, b));
+    if (T == math.Vec3f32) return math.vec.norm(math.vec.sub(a, b));
     if (T == math.Float4) {
         const x = a.x - b.x;
         const y = a.y - b.y;
@@ -491,8 +512,8 @@ fn valueDistance(comptime T: type, a: T, b: T) f32 {
 
 fn lerpValue(comptime T: type, a: T, b: T, t: f32) T {
     if (T == f32) return a + (b - a) * t;
-    if (T == math.Float2) return math.Float2.lerp(a, b, t);
-    if (T == math.Float3) return math.Float3.lerp(a, b, t);
+    if (T == math.Vec2f32) return math.approx.lerp_exact(a, b, t);
+    if (T == math.Vec3f32) return math.approx.lerp_exact(a, b, t);
     if (T == math.Float4) return math.Float4.lerp(a, b, t);
     if (T == math.Quaternion) return math.Quaternion.nlerp(a, b, t);
     @compileError("unsupported track value type");
@@ -620,11 +641,11 @@ pub const MotionExtraction = struct {
     }
 };
 
-fn selected3(value: math.Float3, component: MotionComponent) math.Float3 {
+fn selected3(value: math.Vec3f32, component: MotionComponent) math.Vec3f32 {
     return .{
-        .x = if (component.x) value.x else 0,
-        .y = if (component.y) value.y else 0,
-        .z = if (component.z) value.z else 0,
+        if (component.x) value[0] else 0,
+        if (component.y) value[1] else 0,
+        if (component.z) value[2] else 0,
     };
 }
 
@@ -633,14 +654,14 @@ fn positionReference(
     skeleton: runtime.Skeleton,
     joint: usize,
     reference: MotionReference,
-) math.Float3 {
+) math.Vec3f32 {
     return switch (reference) {
-        .absolute => .zero,
+        .absolute => @splat(0),
         .skeleton => skeleton.jointRestPose(joint).translation,
         .animation => if (input.tracks[joint].translations.len > 0)
             input.tracks[joint].translations[0].value
         else
-            .zero,
+            @splat(0),
     };
 }
 
@@ -682,7 +703,7 @@ pub fn extractMotion(
     var position_keys: std.ArrayList(RawFloat3Track.Key) = .empty;
     defer position_keys.deinit(allocator);
     for (source.translations, 0..) |key, i| {
-        const relative = math.Float3.sub(key.value, position_ref);
+        const relative = math.vec.sub(key.value, position_ref);
         const extracted = selected3(relative, options.position);
         try position_keys.append(allocator, .{
             .interpolation = .linear,
@@ -690,9 +711,9 @@ pub fn extractMotion(
             .value = extracted,
         });
         if (options.position.bake) {
-            const remaining = math.Float3.sub(relative, extracted);
+            const remaining = math.vec.sub(relative, extracted);
             baked.tracks[options.root_joint].translations[i].value =
-                math.Float3.add(position_ref, remaining);
+                math.vec.add(position_ref, remaining);
         }
     }
 
@@ -721,12 +742,12 @@ pub fn extractMotion(
     errdefer rotation.deinit();
 
     if (options.position.loop and position.keys.len > 1) {
-        const delta = math.Float3.sub(position.keys[0].value, position.keys[position.keys.len - 1].value);
+        const delta = math.vec.sub(position.keys[0].value, position.keys[position.keys.len - 1].value);
         const denominator: f32 = @floatFromInt(position.keys.len - 1);
         for (position.keys, 0..) |*key, i| {
-            key.value = math.Float3.add(
+            key.value = math.vec.add(
                 key.value,
-                math.Float3.scale(delta, @as(f32, @floatFromInt(i)) / denominator),
+                math.vec.scale(delta, @as(f32, @floatFromInt(i)) / denominator),
             );
         }
     }
@@ -779,12 +800,12 @@ pub fn buildAdditive(
             pose[i]
         else
             .{
-                .translation = if (track.translations.len > 0) track.translations[0].value else .zero,
+                .translation = if (track.translations.len > 0) track.translations[0].value else @splat(0),
                 .rotation = if (track.rotations.len > 0) track.rotations[0].value else .identity,
-                .scale = if (track.scales.len > 0) track.scales[0].value else .one,
+                .scale = if (track.scales.len > 0) track.scales[0].value else @splat(1),
             };
         for (output.tracks[i].translations) |*key| {
-            key.value = math.Float3.sub(key.value, reference.translation);
+            key.value = math.vec.sub(key.value, reference.translation);
         }
         const inv_rotation = math.Quaternion.conjugate(reference.rotation);
         for (output.tracks[i].rotations) |*key| {
@@ -792,9 +813,9 @@ pub fn buildAdditive(
         }
         for (output.tracks[i].scales) |*key| {
             key.value = .{
-                .x = if (reference.scale.x != 0) key.value.x / reference.scale.x else 0,
-                .y = if (reference.scale.y != 0) key.value.y / reference.scale.y else 0,
-                .z = if (reference.scale.z != 0) key.value.z / reference.scale.z else 0,
+                if (reference.scale[0] != 0) key.value[0] / reference.scale[0] else 0,
+                if (reference.scale[1] != 0) key.value[1] / reference.scale[1] else 0,
+                if (reference.scale[2] != 0) key.value[2] / reference.scale[2] else 0,
             };
         }
     }
@@ -905,7 +926,7 @@ pub fn optimizeAnimation(
         if (track.scales.len != 0) {
             max_scale = 0;
             for (track.scales) |key| {
-                max_scale = @max(max_scale, @max(@abs(key.value.x), @max(@abs(key.value.y), @abs(key.value.z))));
+                max_scale = @max(max_scale, @reduce(.Max, @abs(key.value)));
             }
         }
         const parent = skeleton.parents[joint];
@@ -936,7 +957,7 @@ pub fn optimizeAnimation(
         if (parent == runtime.no_parent) continue;
         var max_length_sq: f32 = 0;
         for (input.tracks[reverse].translations) |key| {
-            max_length_sq = @max(max_length_sq, math.Float3.lengthSquared(key.value));
+            max_length_sq = @max(max_length_sq, math.vec.norm_sqr(key.value));
         }
         const parent_index: usize = @intCast(parent);
         specs[parent_index].length = @max(
@@ -961,7 +982,7 @@ pub fn optimizeAnimation(
     errdefer output.deinit();
     for (input.tracks, 0..) |track, i| {
         output.tracks[i].translations = try decimateTimed(
-            math.Float3,
+            math.Vec3f32,
             TranslationKey,
             allocator,
             track.translations,
@@ -982,7 +1003,7 @@ pub fn optimizeAnimation(
             true,
         );
         output.tracks[i].scales = try decimateTimed(
-            math.Float3,
+            math.Vec3f32,
             ScaleKey,
             allocator,
             track.scales,
@@ -999,17 +1020,17 @@ test "raw sampling, additive building, and key reduction" {
     var raw = try RawAnimation.init(allocator, "raw", 1, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try allocator.dupe(TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 0.5, .value = .{ .x = 1 } },
-        .{ .time = 1, .value = .{ .x = 2 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 0.5, .value = .{ 1, 0, 0 } },
+        .{ .time = 1, .value = .{ 2, 0, 0 } },
     });
     var sampled: [1]math.Transform = undefined;
     try sampleRawAnimation(raw, 0.25, &sampled);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.5), sampled[0].translation.x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), sampled[0].translation[0], 1e-5);
 
     var additive = try buildAdditive(allocator, raw, null);
     defer additive.deinit();
-    try std.testing.expectEqual(@as(f32, 2), additive.tracks[0].translations[2].value.x);
+    try std.testing.expectEqual(@as(f32, 2), additive.tracks[0].translations[2].value[0]);
 
     var skeleton = try runtime.Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = runtime.no_parent },

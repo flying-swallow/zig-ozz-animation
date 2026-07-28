@@ -32,10 +32,14 @@ complete:
   subproject target validates CMake consumption. Neither applies to a Zig
   package.
 - The upstream interactive desktop applications and sample framework are
-  product examples, not conformance inputs. The Zig renderer-neutral
-  `samples/pose_geometry.zig` bridge is tested, but reproducing the upstream
-  OpenGL/ImGui applications, framework, assets, and sample-by-sample UI is
-  explicitly out of scope.
+  product examples, not conformance inputs. All 17 of them are nonetheless
+  ported, in the separate `samples/` package: `samples/src/samples/<name>.zig`
+  against a Zig framework (`samples/src/framework/`) built on SDL3, rhi-zig and
+  Slang instead of GLFW/OpenGL, with the upstream Dear ImGui widget vocabulary
+  remapped onto Dear ImGui proper. Those samples carry their own headless tests
+  (`cd samples && zig build test`) but are exercised as product examples, not as
+  conformance evidence: pixel-level equivalence with the upstream OpenGL
+  renderer is not claimed or measured.
 
 Adding any of these capabilities later is a scope expansion, not closure of a
 current conformance gap. Conversely, behavior exposed by the Zig public API or

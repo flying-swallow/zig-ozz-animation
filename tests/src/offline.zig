@@ -16,8 +16,8 @@ test "Build/AnimationBuilder" {
     var raw = try offline.RawAnimation.init(std.testing.allocator, "test", 2, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 2, .value = .{ .x = 4 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 2, .value = .{ 4, 0, 0 } },
     });
     var built = try offline.AnimationBuilder.build(std.testing.allocator, raw);
     defer built.deinit();
@@ -37,8 +37,8 @@ test "DefaultAndValidation/AnimationBuilder" {
     var duplicate = try offline.RawAnimation.init(allocator, "", 1, 1);
     defer duplicate.deinit();
     duplicate.tracks[0].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0.5, .value = .zero },
-        .{ .time = 0.5, .value = .one },
+        .{ .time = 0.5, .value = @splat(0) },
+        .{ .time = 0.5, .value = @splat(1) },
     });
     try std.testing.expect(!duplicate.validate());
     try std.testing.expectError(
@@ -68,27 +68,27 @@ test "SortAndManyKeys/AnimationBuilder" {
     var raw = try offline.RawAnimation.init(allocator, "many_keys", 1, 4);
     defer raw.deinit();
     raw.tracks[0].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 0.001, .value = .{ .x = 10, .y = 10, .z = 10 } },
-        .{ .time = 0.98, .value = .{ .x = 20, .y = 20, .z = 20 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 0.001, .value = .{ 10, 10, 10 } },
+        .{ .time = 0.98, .value = .{ 20, 20, 20 } },
     });
     raw.tracks[1].translations = try allocator.alloc(offline.TranslationKey, key_count);
     raw.tracks[2].translations = try allocator.alloc(offline.TranslationKey, key_count);
     const denominator: f32 = @floatFromInt(key_count);
     for (0..key_count) |i| {
         const ratio = @as(f32, @floatFromInt(i)) / denominator;
-        raw.tracks[1].translations[i] = .{ .time = ratio, .value = .zero };
+        raw.tracks[1].translations[i] = .{ .time = ratio, .value = @splat(0) };
         const cosine = @cos(@as(f32, std.math.pi) * ratio);
         raw.tracks[2].translations[i] = .{
             .time = ratio,
-            .value = .{ .x = cosine, .y = cosine, .z = cosine },
+            .value = .{ cosine, cosine, cosine },
         };
     }
     raw.tracks[3].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 0.001, .value = .one },
-        .{ .time = 0.9, .value = .{ .x = 2, .y = 2, .z = 2 } },
-        .{ .time = 0.91, .value = .{ .x = 3, .y = 3, .z = 3 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 0.001, .value = @splat(1) },
+        .{ .time = 0.9, .value = .{ 2, 2, 2 } },
+        .{ .time = 0.91, .value = .{ 3, 3, 3 } },
     });
 
     var built = try offline.AnimationBuilder.build(allocator, raw);
@@ -114,9 +114,9 @@ test "SortAndManyKeys/AnimationBuilder" {
         try animation.sample(&built, case.ratio, &context, &output);
         for (case.expected_x, 0..) |expected, lane| {
             const actual = math.soaLane(output[0], lane);
-            try std.testing.expectApproxEqAbs(expected, actual.translation.x, 2e-3);
+            try std.testing.expectApproxEqAbs(expected, actual.translation[0], 2e-3);
             try h.expectQuaternion(.identity, actual.rotation);
-            try h.expectFloat3(.one, actual.scale);
+            try h.expectFloat3(@splat(1), actual.scale);
         }
     }
 }
@@ -195,18 +195,18 @@ test "SamplingTrackEmpty/Utils" {
 test "SamplingTrack/Utils" {
     const track: offline.RawJointTrack = .{
         .translations = @constCast(&[_]offline.TranslationKey{
-            .{ .time = 0, .value = .zero },
-            .{ .time = 1, .value = .{ .x = 2 } },
+            .{ .time = 0, .value = @splat(0) },
+            .{ .time = 1, .value = .{ 2, 0, 0 } },
         }),
     };
-    try h.expectFloat(0.5, (try offline.sampleJointTrack(track, 0.25)).translation.x);
+    try h.expectFloat(0.5, (try offline.sampleJointTrack(track, 0.25)).translation[0]);
 }
 
 test "SamplingTrackInvalid/Utils" {
     const unordered: offline.RawJointTrack = .{
         .translations = @constCast(&[_]offline.TranslationKey{
-            .{ .time = 0.9, .value = .{ .x = 1, .y = 2, .z = 4 } },
-            .{ .time = 0.1, .value = .{ .x = 2, .y = 4, .z = 8 } },
+            .{ .time = 0.9, .value = .{ 1, 2, 4 } },
+            .{ .time = 0.1, .value = .{ 2, 4, 8 } },
         }),
     };
     try std.testing.expectError(
@@ -216,7 +216,7 @@ test "SamplingTrackInvalid/Utils" {
 
     const negative_time: offline.RawJointTrack = .{
         .translations = @constCast(&[_]offline.TranslationKey{
-            .{ .time = -1, .value = .{ .x = 1, .y = 2, .z = 4 } },
+            .{ .time = -1, .value = .{ 1, 2, 4 } },
         }),
     };
     try std.testing.expectError(
@@ -236,13 +236,13 @@ test "TimePoints/Utils" {
     var raw = try offline.RawAnimation.init(std.testing.allocator, "", 2, 2);
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 0.2, .value = .zero },
-        .{ .time = 2, .value = .zero },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 0.2, .value = @splat(0) },
+        .{ .time = 2, .value = @splat(0) },
     });
     raw.tracks[1].scales = try std.testing.allocator.dupe(offline.ScaleKey, &.{
-        .{ .time = 0.2, .value = .one },
-        .{ .time = 1, .value = .one },
+        .{ .time = 0.2, .value = @splat(1) },
+        .{ .time = 1, .value = @splat(1) },
     });
     const points = try offline.extractTimePoints(std.testing.allocator, raw);
     defer std.testing.allocator.free(points);
@@ -350,21 +350,21 @@ test "Build/AdditiveAnimationBuilder" {
     var raw = try offline.RawAnimation.init(std.testing.allocator, "", 1, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .{ .x = 2 } },
-        .{ .time = 1, .value = .{ .x = 5 } },
+        .{ .time = 0, .value = .{ 2, 0, 0 } },
+        .{ .time = 1, .value = .{ 5, 0, 0 } },
     });
     var additive = try offline.buildAdditive(std.testing.allocator, raw, null);
     defer additive.deinit();
-    try h.expectFloat(0, additive.tracks[0].translations[0].value.x);
-    try h.expectFloat(3, additive.tracks[0].translations[1].value.x);
+    try h.expectFloat(0, additive.tracks[0].translations[0].value[0]);
+    try h.expectFloat(3, additive.tracks[0].translations[1].value[0]);
 }
 
 test "Extract/MotionExtractor" {
     var raw = try offline.RawAnimation.init(std.testing.allocator, "motion", 2, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .{ .x = 1, .y = 2, .z = 3 } },
-        .{ .time = 2, .value = .{ .x = 4, .y = 5, .z = 6 } },
+        .{ .time = 0, .value = .{ 1, 2, 3 } },
+        .{ .time = 2, .value = .{ 4, 5, 6 } },
     });
     var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
         .{ .name = "root", .parent = animation.no_parent },
@@ -374,8 +374,8 @@ test "Extract/MotionExtractor" {
         .position = .{ .x = true, .bake = true },
     });
     defer result.deinit();
-    try h.expectFloat3(.{ .x = 1 }, result.position.keys[0].value);
-    try h.expectFloat3(.{ .y = 2, .z = 3 }, result.baked.tracks[0].translations[0].value);
+    try h.expectFloat3(.{ 1, 0, 0 }, result.position.keys[0].value);
+    try h.expectFloat3(.{ 0, 2, 3 }, result.baked.tracks[0].translations[0].value);
 }
 
 test "ExtractPositionAndYaw/MotionExtractor" {
@@ -384,12 +384,12 @@ test "ExtractPositionAndYaw/MotionExtractor" {
     var raw = try offline.RawAnimation.init(allocator, "motion", 2, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .{ .x = 1, .y = 2, .z = 3 } },
-        .{ .time = 2, .value = .{ .x = 4, .y = 5, .z = 6 } },
+        .{ .time = 0, .value = .{ 1, 2, 3 } },
+        .{ .time = 2, .value = .{ 4, 5, 6 } },
     });
     raw.tracks[0].rotations = try allocator.dupe(offline.RotationKey, &.{
-        .{ .time = 0, .value = math.Quaternion.fromEuler(.{ .x = half_pi, .y = half_pi }) },
-        .{ .time = 2, .value = math.Quaternion.fromEuler(.{ .x = half_pi, .y = half_pi }) },
+        .{ .time = 0, .value = math.Quaternion.fromEuler(.{ half_pi, half_pi, 0 }) },
+        .{ .time = 2, .value = math.Quaternion.fromEuler(.{ half_pi, half_pi, 0 }) },
     });
     var skeleton = try animation.Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = animation.no_parent },
@@ -402,8 +402,8 @@ test "ExtractPositionAndYaw/MotionExtractor" {
     });
     defer result.deinit();
 
-    try h.expectFloat3(.{ .x = -3, .y = 2 }, result.baked.tracks[0].translations[0].value);
-    try h.expectFloat3(.{ .x = -6, .y = 5 }, result.baked.tracks[0].translations[1].value);
+    try h.expectFloat3(.{ -3, 2, 0 }, result.baked.tracks[0].translations[0].value);
+    try h.expectFloat3(.{ -6, 5, 0 }, result.baked.tracks[0].translations[1].value);
 }
 
 test "ReferenceLoopAndJoint/MotionExtractor" {
@@ -411,19 +411,19 @@ test "ReferenceLoopAndJoint/MotionExtractor" {
     var raw = try offline.RawAnimation.init(allocator, "motion", 2, 2);
     defer raw.deinit();
     raw.tracks[1].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .{ .x = 11 } },
-        .{ .time = 2, .value = .{ .x = 15 } },
+        .{ .time = 0, .value = .{ 11, 0, 0 } },
+        .{ .time = 2, .value = .{ 15, 0, 0 } },
     });
     raw.tracks[1].rotations = try allocator.dupe(offline.RotationKey, &.{
         .{ .time = 0, .value = .identity },
-        .{ .time = 2, .value = math.Quaternion.fromAxisAngle(.y_axis, 1) },
+        .{ .time = 2, .value = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 1) },
     });
     var skeleton = try animation.Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = animation.no_parent },
         .{
             .name = "motion",
             .parent = 0,
-            .rest_pose = .{ .translation = .{ .x = 10 } },
+            .rest_pose = .{ .translation = .{ 10, 0, 0 } },
         },
     });
     defer skeleton.deinit();
@@ -440,11 +440,11 @@ test "ReferenceLoopAndJoint/MotionExtractor" {
     });
     defer result.deinit();
 
-    try h.expectFloat3(.{ .x = 1 }, result.position.keys[0].value);
+    try h.expectFloat3(.{ 1, 0, 0 }, result.position.keys[0].value);
     try h.expectFloat3(result.position.keys[0].value, result.position.keys[1].value);
     try h.expectQuaternion(result.rotation.keys[0].value, result.rotation.keys[1].value);
-    try h.expectFloat3(.{ .x = 11 }, result.baked.tracks[1].translations[0].value);
-    try h.expectFloat3(.{ .x = 15 }, result.baked.tracks[1].translations[1].value);
+    try h.expectFloat3(.{ 11, 0, 0 }, result.baked.tracks[1].translations[0].value);
+    try h.expectFloat3(.{ 15, 0, 0 }, result.baked.tracks[1].translations[1].value);
     try std.testing.expectEqual(@as(usize, 0), result.baked.tracks[0].translations.len);
 }
 
@@ -521,11 +521,11 @@ test "Float/TrackBuilder" {
 }
 
 test "Float2/TrackBuilder" {
-    try expectBuildType(math.Float2, .zero, .one);
+    try expectBuildType(math.Vec2f32, @splat(0), @splat(1));
 }
 
 test "Float3/TrackBuilder" {
-    try expectBuildType(math.Float3, .zero, .one);
+    try expectBuildType(math.Vec3f32, @splat(0), @splat(1));
 }
 
 test "Float4/TrackBuilder" {
@@ -533,7 +533,7 @@ test "Float4/TrackBuilder" {
 }
 
 test "Quaternion/TrackBuilder" {
-    try expectBuildType(math.Quaternion, .identity, math.Quaternion.fromAxisAngle(.x_axis, 1));
+    try expectBuildType(math.Quaternion, .identity, math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, 1));
 
     var raw = try offline.RawQuaternionTrack.init(std.testing.allocator, "", &.{
         .{
@@ -583,11 +583,11 @@ test "float/TrackOptimizer" {
 }
 
 test "Float2/TrackOptimizer" {
-    try expectOptimizeType(math.Float2, .zero, .{ .x = 0.5, .y = 0.5 }, .one);
+    try expectOptimizeType(math.Vec2f32, @splat(0), .{ 0.5, 0.5 }, @splat(1));
 }
 
 test "Float3/TrackOptimizer" {
-    try expectOptimizeType(math.Float3, .zero, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, .one);
+    try expectOptimizeType(math.Vec3f32, @splat(0), .{ 0.5, 0.5, 0.5 }, @splat(1));
 }
 
 test "Float4/TrackOptimizer" {
@@ -600,7 +600,7 @@ test "Float4/TrackOptimizer" {
 }
 
 test "Quaternion/TrackOptimizer" {
-    const end = math.Quaternion.fromAxisAngle(.x_axis, 1);
+    const end = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, 1);
     try expectOptimizeType(math.Quaternion, .identity, math.Quaternion.nlerp(.identity, end, 0.5), end);
 }
 
@@ -619,13 +619,13 @@ test "OptimizeSteps/TrackOptimizer" {
 test "SampleFloat2/RawTrackUtils" {
     var track = try offline.RawFloat2Track.init(std.testing.allocator, "", &.{});
     defer track.deinit();
-    try std.testing.expectEqual(math.Float2.zero, offline.sampleTrack(math.Float2, track, 0.5));
+    try std.testing.expectEqual(@as(math.Vec2f32, @splat(0)), offline.sampleTrack(math.Vec2f32, track, 0.5));
 }
 
 test "SampleFloat3/RawTrackUtils" {
     var track = try offline.RawFloat3Track.init(std.testing.allocator, "", &.{});
     defer track.deinit();
-    try std.testing.expectEqual(math.Float3.zero, offline.sampleTrack(math.Float3, track, 0.5));
+    try std.testing.expectEqual(@as(math.Vec3f32, @splat(0)), offline.sampleTrack(math.Vec3f32, track, 0.5));
 }
 
 test "SampleFloat4/RawTrackUtils" {
@@ -647,13 +647,13 @@ test "BuildRefPose/AdditiveAnimationBuilder" {
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(
         offline.TranslationKey,
-        &.{.{ .time = 0, .value = .{ .x = 5 } }},
+        &.{.{ .time = 0, .value = .{ 5, 0, 0 } }},
     );
     var result = try offline.buildAdditive(std.testing.allocator, raw, &.{
-        .{ .translation = .{ .x = 2 } },
+        .{ .translation = .{ 2, 0, 0 } },
     });
     defer result.deinit();
-    try h.expectFloat(3, result.tracks[0].translations[0].value.x);
+    try h.expectFloat(3, result.tracks[0].translations[0].value[0]);
 }
 
 test "Error/AdditiveAnimationBuilder" {
@@ -691,13 +691,13 @@ test "RestPose/SkeletonBuilder" {
     var roots = try allocator.alloc(offline.RawJoint, 1);
     roots[0] = .{
         .name = try allocator.dupe(u8, "root"),
-        .transform = .{ .translation = .{ .x = 1, .y = 2, .z = 3 } },
+        .transform = .{ .translation = .{ 1, 2, 3 } },
     };
     var raw: offline.RawSkeleton = .{ .allocator = allocator, .roots = roots };
     defer raw.deinit();
     var skeleton = try offline.SkeletonBuilder.build(allocator, raw);
     defer skeleton.deinit();
-    try h.expectFloat3(.{ .x = 1, .y = 2, .z = 3 }, skeleton.jointRestPose(0).translation);
+    try h.expectFloat3(.{ 1, 2, 3 }, skeleton.jointRestPose(0).translation);
 }
 
 test "Iterate/SkeletonBuilder" {
@@ -777,9 +777,9 @@ test "Optimize/AnimationOptimizer" {
     var raw = try offline.RawAnimation.init(std.testing.allocator, "", 1, 1);
     defer raw.deinit();
     raw.tracks[0].translations = try std.testing.allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .zero },
-        .{ .time = 0.5, .value = .{ .x = 0.5 } },
-        .{ .time = 1, .value = .{ .x = 1 } },
+        .{ .time = 0, .value = @splat(0) },
+        .{ .time = 0.5, .value = .{ 0.5, 0, 0 } },
+        .{ .time = 1, .value = .{ 1, 0, 0 } },
     });
     var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
         .{ .name = "root", .parent = animation.no_parent },
@@ -801,10 +801,10 @@ test "OptimizeHierarchyAndOverrides/AnimationOptimizer" {
     var raw = try offline.RawAnimation.init(allocator, "hierarchy", 1, 3);
     defer raw.deinit();
     raw.tracks[2].translations = try allocator.dupe(offline.TranslationKey, &.{
-        .{ .time = 0, .value = .{ .x = 5 } },
-        .{ .time = 0.1, .value = .{ .x = 6 } },
-        .{ .time = 0.2, .value = .{ .x = 7.1 } },
-        .{ .time = 0.3, .value = .{ .x = 8 } },
+        .{ .time = 0, .value = .{ 5, 0, 0 } },
+        .{ .time = 0.1, .value = .{ 6, 0, 0 } },
+        .{ .time = 0.2, .value = .{ 7.1, 0, 0 } },
+        .{ .time = 0.3, .value = .{ 8, 0, 0 } },
     });
 
     var loose = try offline.optimizeAnimation(allocator, raw, skeleton, .{
@@ -815,7 +815,7 @@ test "OptimizeHierarchyAndOverrides/AnimationOptimizer" {
     try std.testing.expectEqual(@as(usize, 2), loose.tracks[2].translations.len);
 
     raw.tracks[0].scales = try allocator.dupe(offline.ScaleKey, &.{
-        .{ .time = 0, .value = .{ .x = 10, .y = 10, .z = 10 } },
+        .{ .time = 0, .value = .{ 10, 10, 10 } },
     });
     var scaled = try offline.optimizeAnimation(allocator, raw, skeleton, .{
         .tolerance = 0.1,
@@ -838,12 +838,12 @@ test "OptimizeHierarchyAndOverrides/AnimationOptimizer" {
     allocator.free(raw.tracks[0].scales);
     raw.tracks[0].scales = try allocator.alloc(offline.ScaleKey, 0);
     raw.tracks[0].rotations = try allocator.dupe(offline.RotationKey, &.{
-        .{ .time = 0, .value = math.Quaternion.fromEuler(.zero) },
+        .{ .time = 0, .value = math.Quaternion.fromEuler(@splat(0)) },
         .{
             .time = 0.1,
-            .value = math.Quaternion.fromEuler(.{ .x = @as(f32, std.math.pi) / 4 + 2.5e-3 }),
+            .value = math.Quaternion.fromEuler(.{ @as(f32, std.math.pi) / 4 + 2.5e-3, 0, 0 }),
         },
-        .{ .time = 0.2, .value = math.Quaternion.fromEuler(.{ .x = @as(f32, std.math.pi) / 2 }) },
+        .{ .time = 0.2, .value = math.Quaternion.fromEuler(.{ @as(f32, std.math.pi) / 2, 0, 0 }) },
     });
     var rotation_loose = try offline.optimizeAnimation(allocator, raw, skeleton, .{
         .tolerance = 0.3,

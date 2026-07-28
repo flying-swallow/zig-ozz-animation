@@ -71,12 +71,12 @@ pub const SkinningOptions = struct {
     /// Either all influences, or N-1 weights per vertex. In the latter form
     /// the final weight is restored as `1 - sum(previous)`.
     joint_weights: []const f32,
-    input_positions: []const math.Float3,
-    input_normals: ?[]const math.Float3 = null,
-    input_tangents: ?[]const math.Float3 = null,
-    output_positions: []math.Float3,
-    output_normals: ?[]math.Float3 = null,
-    output_tangents: ?[]math.Float3 = null,
+    input_positions: []const math.Vec3f32,
+    input_normals: ?[]const math.Vec3f32 = null,
+    input_tangents: ?[]const math.Vec3f32 = null,
+    output_positions: []math.Vec3f32,
+    output_normals: ?[]math.Vec3f32 = null,
+    output_tangents: ?[]math.Vec3f32 = null,
     influences_count: usize,
 };
 
@@ -117,9 +117,9 @@ pub fn skin(options: SkinningOptions) !void {
     }
 
     for (options.input_positions, 0..) |position, vertex| {
-        var out_position = math.Float3.zero;
-        var out_normal = math.Float3.zero;
-        var out_tangent = math.Float3.zero;
+        var out_position = @as(math.Vec3f32, @splat(0));
+        var out_normal = @as(math.Vec3f32, @splat(0));
+        var out_tangent = @as(math.Vec3f32, @splat(0));
         var previous_weight: f32 = 0;
         const base = vertex * options.influences_count;
         for (0..options.influences_count) |influence| {
@@ -135,9 +135,9 @@ pub fn skin(options: SkinningOptions) !void {
                 options.joint_weights[weight_index];
             if (weight == 0) continue;
             const matrix = options.joint_matrices[joint];
-            out_position = math.Float3.add(
+            out_position = math.vec.add(
                 out_position,
-                math.Float3.scale(math.Float4x4.transformPoint(matrix, position), weight),
+                math.vec.scale(math.Float4x4.transformPoint(matrix, position), weight),
             );
             if (options.input_normals) |normals| {
                 const n = normals[vertex];
@@ -146,7 +146,7 @@ pub fn skin(options: SkinningOptions) !void {
                 else
                     matrix;
                 const transformed = math.Float4x4.transformVector(normal_matrix, n);
-                out_normal = math.Float3.add(out_normal, math.Float3.scale(transformed, weight));
+                out_normal = math.vec.add(out_normal, math.vec.scale(transformed, weight));
             }
             if (options.input_tangents) |tangents| {
                 const tangent_matrix = if (options.joint_inverse_transpose_matrices) |matrices|
@@ -154,7 +154,7 @@ pub fn skin(options: SkinningOptions) !void {
                 else
                     matrix;
                 const transformed = math.Float4x4.transformVector(tangent_matrix, tangents[vertex]);
-                out_tangent = math.Float3.add(out_tangent, math.Float3.scale(transformed, weight));
+                out_tangent = math.vec.add(out_tangent, math.vec.scale(transformed, weight));
             }
             previous_weight += weight;
         }
@@ -196,14 +196,24 @@ fn requiredBytes(count: usize, stride: usize, element_size: usize) !usize {
         return SkinningError.InvalidVertexCount;
 }
 
-fn readStrided(comptime T: type, bytes: []const u8, index: usize, stride: usize) T {
+const packed_float3_size = 3 * @sizeOf(f32);
+
+fn readStridedVec3(bytes: []const u8, index: usize, stride: usize) math.Vec3f32 {
     const offset = index * stride;
-    return std.mem.bytesToValue(T, bytes[offset..][0..@sizeOf(T)]);
+    return .{
+        std.mem.bytesToValue(f32, bytes[offset..][0..@sizeOf(f32)]),
+        std.mem.bytesToValue(f32, bytes[offset + @sizeOf(f32) ..][0..@sizeOf(f32)]),
+        std.mem.bytesToValue(f32, bytes[offset + 2 * @sizeOf(f32) ..][0..@sizeOf(f32)]),
+    };
 }
 
-fn writeStrided(comptime T: type, bytes: []u8, index: usize, stride: usize, value: T) void {
+fn writeStridedVec3(bytes: []u8, index: usize, stride: usize, value: math.Vec3f32) void {
     const offset = index * stride;
-    @memcpy(bytes[offset..][0..@sizeOf(T)], std.mem.asBytes(&value));
+    inline for (0..3) |lane_index| {
+        const lane = value[lane_index];
+        const lane_offset = offset + lane_index * @sizeOf(f32);
+        @memcpy(bytes[lane_offset..][0..@sizeOf(f32)], std.mem.asBytes(&lane));
+    }
 }
 
 /// Ozz-compatible strided CPU skinning. Positions, normals, and tangents are
@@ -221,27 +231,27 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
     // requiredBytes likewise verifies that the final record is present.
     if (options.joint_indices.len < try requiredBytes(options.vertex_count, options.joint_indices_stride, index_size) or
         options.joint_weights.len < try requiredBytes(options.vertex_count, options.joint_weights_stride, weight_size) or
-        options.input_positions.len < try requiredBytes(options.vertex_count, options.input_positions_stride, @sizeOf(math.Float3)) or
-        options.output_positions.len < try requiredBytes(options.vertex_count, options.output_positions_stride, @sizeOf(math.Float3)))
+        options.input_positions.len < try requiredBytes(options.vertex_count, options.input_positions_stride, packed_float3_size) or
+        options.output_positions.len < try requiredBytes(options.vertex_count, options.output_positions_stride, packed_float3_size))
     {
         return SkinningError.BufferTooSmall;
     }
     if (options.input_normals) |input| {
-        if (options.input_normals_stride < @sizeOf(math.Float3) or
+        if (options.input_normals_stride < packed_float3_size or
             options.output_normals == null or
-            options.output_normals_stride < @sizeOf(math.Float3) or
-            input.len < try requiredBytes(options.vertex_count, options.input_normals_stride, @sizeOf(math.Float3)) or
-            options.output_normals.?.len < try requiredBytes(options.vertex_count, options.output_normals_stride, @sizeOf(math.Float3)))
+            options.output_normals_stride < packed_float3_size or
+            input.len < try requiredBytes(options.vertex_count, options.input_normals_stride, packed_float3_size) or
+            options.output_normals.?.len < try requiredBytes(options.vertex_count, options.output_normals_stride, packed_float3_size))
         {
             return SkinningError.BufferTooSmall;
         }
     }
     if (options.input_tangents) |input| {
-        if (options.input_normals == null or options.input_tangents_stride < @sizeOf(math.Float3) or
+        if (options.input_normals == null or options.input_tangents_stride < packed_float3_size or
             options.output_tangents == null or
-            options.output_tangents_stride < @sizeOf(math.Float3) or
-            input.len < try requiredBytes(options.vertex_count, options.input_tangents_stride, @sizeOf(math.Float3)) or
-            options.output_tangents.?.len < try requiredBytes(options.vertex_count, options.output_tangents_stride, @sizeOf(math.Float3)))
+            options.output_tangents_stride < packed_float3_size or
+            input.len < try requiredBytes(options.vertex_count, options.input_tangents_stride, packed_float3_size) or
+            options.output_tangents.?.len < try requiredBytes(options.vertex_count, options.output_tangents_stride, packed_float3_size))
         {
             return SkinningError.BufferTooSmall;
         }
@@ -251,18 +261,18 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
     }
 
     for (0..options.vertex_count) |vertex| {
-        const input_position = readStrided(math.Float3, options.input_positions, vertex, options.input_positions_stride);
+        const input_position = readStridedVec3(options.input_positions, vertex, options.input_positions_stride);
         const input_normal = if (options.input_normals) |input|
-            readStrided(math.Float3, input, vertex, options.input_normals_stride)
+            readStridedVec3(input, vertex, options.input_normals_stride)
         else
-            math.Float3.zero;
+            @as(math.Vec3f32, @splat(0));
         const input_tangent = if (options.input_tangents) |input|
-            readStrided(math.Float3, input, vertex, options.input_tangents_stride)
+            readStridedVec3(input, vertex, options.input_tangents_stride)
         else
-            math.Float3.zero;
-        var output_position = math.Float3.zero;
-        var output_normal = math.Float3.zero;
-        var output_tangent = math.Float3.zero;
+            @as(math.Vec3f32, @splat(0));
+        var output_position = @as(math.Vec3f32, @splat(0));
+        var output_normal = @as(math.Vec3f32, @splat(0));
+        var output_tangent = @as(math.Vec3f32, @splat(0));
         var accumulated_weight: f32 = 0;
         const index_base = vertex * options.joint_indices_stride;
         const weight_base = vertex * options.joint_weights_stride;
@@ -281,18 +291,18 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
                 );
             accumulated_weight += weight;
             const matrix = options.joint_matrices[joint];
-            output_position = math.Float3.add(
+            output_position = math.vec.add(
                 output_position,
-                math.Float3.scale(math.Float4x4.transformPoint(matrix, input_position), weight),
+                math.vec.scale(math.Float4x4.transformPoint(matrix, input_position), weight),
             );
             if (options.input_normals != null) {
                 const normal_matrix = if (options.joint_inverse_transpose_matrices) |matrices|
                     matrices[joint]
                 else
                     matrix;
-                output_normal = math.Float3.add(
+                output_normal = math.vec.add(
                     output_normal,
-                    math.Float3.scale(math.Float4x4.transformVector(normal_matrix, input_normal), weight),
+                    math.vec.scale(math.Float4x4.transformVector(normal_matrix, input_normal), weight),
                 );
             }
             if (options.input_tangents != null) {
@@ -300,18 +310,18 @@ pub fn skinStrided(options: StridedSkinningOptions) !void {
                     matrices[joint]
                 else
                     matrix;
-                output_tangent = math.Float3.add(
+                output_tangent = math.vec.add(
                     output_tangent,
-                    math.Float3.scale(math.Float4x4.transformVector(tangent_matrix, input_tangent), weight),
+                    math.vec.scale(math.Float4x4.transformVector(tangent_matrix, input_tangent), weight),
                 );
             }
         }
-        writeStrided(math.Float3, options.output_positions, vertex, options.output_positions_stride, output_position);
+        writeStridedVec3(options.output_positions, vertex, options.output_positions_stride, output_position);
         if (options.output_normals) |output| {
-            writeStrided(math.Float3, output, vertex, options.output_normals_stride, output_normal);
+            writeStridedVec3(output, vertex, options.output_normals_stride, output_normal);
         }
         if (options.output_tangents) |output| {
-            writeStrided(math.Float3, output, vertex, options.output_tangents_stride, output_tangent);
+            writeStridedVec3(output, vertex, options.output_tangents_stride, output_tangent);
         }
     }
 }
@@ -321,16 +331,16 @@ const std = @import("std");
 test "linear blend skinning" {
     const matrices = [_]math.Float4x4{
         math.Float4x4.identity,
-        math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+        math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
     };
-    var output: [1]math.Float3 = undefined;
+    var output: [1]math.Vec3f32 = undefined;
     try skin(.{
         .joint_matrices = &matrices,
         .joint_indices = &.{ 0, 1 },
         .joint_weights = &.{ 0.25, 0.75 },
-        .input_positions = &.{.{ .x = 1 }},
+        .input_positions = &.{.{ 1, 0, 0 }},
         .output_positions = &output,
         .influences_count = 2,
     });
-    try std.testing.expectApproxEqAbs(@as(f32, 2.5), output[0].x, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 2.5), output[0][0], 1e-5);
 }

@@ -1,0 +1,20 @@
+.{
+    .name = .zig_ozz_animation_bench,
+    .version = "0.0.0",
+    .fingerprint = 0xa7922b2be2a4ff7b,
+    .minimum_zig_version = "0.17.0-dev.1415+64dfaa568",
+    .dependencies = .{
+        .zig_ozz_animation = .{
+            .path = "..",
+        },
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zBench/archive/f12a2262bcd9d300207890555c577da5e29de453.tar.gz",
+            .hash = "zbench-0.14.1-YTdc781OAQCR6wxqkgAwm9bG4TnFGzm8c9aE-ZPiTAU1",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "sampling.zig",
+    },
+}

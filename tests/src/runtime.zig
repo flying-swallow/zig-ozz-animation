@@ -163,18 +163,18 @@ test "SamplingNoTrack/SamplingJob" {
 
 test "Sampling/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
-        .{ .translations = &.{.{ .ratio = 0.2, .value = .{ .x = -1 } }} },
+        .{ .translations = &.{.{ .ratio = 0.2, .value = .{ -1, 0, 0 } }} },
         .{},
         .{ .translations = &.{
-            .{ .ratio = 0, .value = .{ .x = 2 } },
-            .{ .ratio = 0.2, .value = .{ .x = 6 } },
-            .{ .ratio = 0.4, .value = .{ .x = 8 } },
-            .{ .ratio = 0.6, .value = .{ .x = 10 } },
-            .{ .ratio = 1, .value = .{ .x = 11 } },
+            .{ .ratio = 0, .value = .{ 2, 0, 0 } },
+            .{ .ratio = 0.2, .value = .{ 6, 0, 0 } },
+            .{ .ratio = 0.4, .value = .{ 8, 0, 0 } },
+            .{ .ratio = 0.6, .value = .{ 10, 0, 0 } },
+            .{ .ratio = 1, .value = .{ 11, 0, 0 } },
         } },
         .{ .translations = &.{
-            .{ .ratio = 0.2, .value = .{ .x = 7 } },
-            .{ .ratio = 0.6, .value = .{ .x = 9 } },
+            .{ .ratio = 0.2, .value = .{ 7, 0, 0 } },
+            .{ .ratio = 0.6, .value = .{ 9, 0, 0 } },
         } },
     });
     defer value.deinit();
@@ -206,10 +206,10 @@ test "Sampling/SamplingJob" {
         try animation.sample(&value, case.ratio, &context, &output);
         for (0..4) |lane| {
             const sampled = math.soaLane(output[0], lane);
-            try h.expectFloat(case.expected[lane], sampled.translation.x);
-            try h.expectFloat3(.{ .x = case.expected[lane] }, sampled.translation);
+            try h.expectFloat(case.expected[lane], sampled.translation[0]);
+            try h.expectFloat3(.{ case.expected[lane], 0, 0 }, sampled.translation);
             try h.expectQuaternion(.identity, sampled.rotation);
-            try h.expectFloat3(.one, sampled.scale);
+            try h.expectFloat3(@splat(1), sampled.scale);
         }
     }
 }
@@ -217,20 +217,20 @@ test "Sampling/SamplingJob" {
 test "SamplingTranslationRotationScaleAndClamp/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
         .{ .translations = &.{
-            .{ .ratio = 0.5, .value = .{ .x = 1, .y = 2, .z = 4 } },
-            .{ .ratio = 0.8, .value = .{ .x = 2, .y = 4, .z = 8 } },
+            .{ .ratio = 0.5, .value = .{ 1, 2, 4 } },
+            .{ .ratio = 0.8, .value = .{ 2, 4, 8 } },
         } },
         .{ .rotations = &.{
             .{ .ratio = 0, .value = .identity },
             .{ .ratio = 1, .value = .{ .y = 1, .w = 0 } },
         } },
         .{ .scales = &.{
-            .{ .ratio = 0.5, .value = .zero },
-            .{ .ratio = 0.8, .value = .{ .x = -1, .y = -1, .z = -1 } },
+            .{ .ratio = 0.5, .value = @splat(0) },
+            .{ .ratio = 0.8, .value = .{ -1, -1, -1 } },
         } },
         .{ .translations = &.{
-            .{ .ratio = 0, .value = .{ .x = -1, .y = -2, .z = -4 } },
-            .{ .ratio = 1, .value = .{ .x = -2, .y = -4, .z = -8 } },
+            .{ .ratio = 0, .value = .{ -1, -2, -4 } },
+            .{ .ratio = 1, .value = .{ -2, -4, -8 } },
         } },
     });
     defer value.deinit();
@@ -240,27 +240,27 @@ test "SamplingTranslationRotationScaleAndClamp/SamplingJob" {
 
     try animation.sample(&value, -1, &context, &output);
     try h.expectTransform(.{
-        .translation = .{ .x = 1, .y = 2, .z = 4 },
+        .translation = .{ 1, 2, 4 },
     }, math.soaLane(output[0], 0));
     try h.expectTransform(.{
         .rotation = .identity,
     }, math.soaLane(output[0], 1));
     try h.expectTransform(.{
-        .scale = .zero,
+        .scale = @splat(0),
     }, math.soaLane(output[0], 2));
     try h.expectTransform(.{
-        .translation = .{ .x = -1, .y = -2, .z = -4 },
+        .translation = .{ -1, -2, -4 },
     }, math.soaLane(output[0], 3));
 
     try animation.sample(&value, 0.5, &context, &output);
     try h.expectQuaternion(.{ .y = 0.70710677, .w = 0.70710677 }, math.soaLane(output[0], 1).rotation);
-    try h.expectFloat3(.{ .x = -1.5, .y = -3, .z = -6 }, math.soaLane(output[0], 3).translation);
+    try h.expectFloat3(.{ -1.5, -3, -6 }, math.soaLane(output[0], 3).translation);
 
     try animation.sample(&value, 2, &context, &output);
-    try h.expectFloat3(.{ .x = 2, .y = 4, .z = 8 }, math.soaLane(output[0], 0).translation);
+    try h.expectFloat3(.{ 2, 4, 8 }, math.soaLane(output[0], 0).translation);
     try h.expectQuaternion(.{ .y = 1, .w = 0 }, math.soaLane(output[0], 1).rotation);
-    try h.expectFloat3(.{ .x = -1, .y = -1, .z = -1 }, math.soaLane(output[0], 2).scale);
-    try h.expectFloat3(.{ .x = -2, .y = -4, .z = -8 }, math.soaLane(output[0], 3).translation);
+    try h.expectFloat3(.{ -1, -1, -1 }, math.soaLane(output[0], 2).scale);
+    try h.expectFloat3(.{ -2, -4, -8 }, math.soaLane(output[0], 3).translation);
 }
 
 test "Sampling1Track0Key/SamplingJob" {
@@ -275,21 +275,21 @@ test "Sampling1Track0Key/SamplingJob" {
 
 test "Sampling1Track1Key/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{.{
-        .translations = &.{.{ .ratio = 0.46, .value = .{ .x = 1, .y = 2, .z = 3 } }},
+        .translations = &.{.{ .ratio = 0.46, .value = .{ 1, 2, 3 } }},
     }});
     defer value.deinit();
     var context = try animation.SamplingContext.init(std.testing.allocator, 1);
     defer context.deinit();
     var output: [1]math.SoaTransform = undefined;
     try animation.sample(&value, 0, &context, &output);
-    try h.expectFloat3(.{ .x = 1, .y = 2, .z = 3 }, math.soaLane(output[0], 0).translation);
+    try h.expectFloat3(.{ 1, 2, 3 }, math.soaLane(output[0], 0).translation);
 }
 
 test "Sampling1Track2Keys/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{.{
         .translations = &.{
-            .{ .ratio = 0, .value = .zero },
-            .{ .ratio = 1, .value = .{ .x = 2, .y = 4, .z = 6 } },
+            .{ .ratio = 0, .value = @splat(0) },
+            .{ .ratio = 1, .value = .{ 2, 4, 6 } },
         },
     }});
     defer value.deinit();
@@ -297,10 +297,10 @@ test "Sampling1Track2Keys/SamplingJob" {
     defer context.deinit();
     var output: [1]math.SoaTransform = undefined;
     try animation.sample(&value, 0.25, &context, &output);
-    try h.expectFloat3(.{ .x = 0.5, .y = 1, .z = 1.5 }, math.soaLane(output[0], 0).translation);
+    try h.expectFloat3(.{ 0.5, 1, 1.5 }, math.soaLane(output[0], 0).translation);
     try animation.sample(&value, 0.75, &context, &output);
     try animation.sample(&value, 0.1, &context, &output);
-    try h.expectFloat(0.2, math.soaLane(output[0], 0).translation.x);
+    try h.expectFloat(0.2, math.soaLane(output[0], 0).translation[0]);
 }
 
 test "JobValidity/LocalToModel" {
@@ -318,10 +318,10 @@ test "TransformationFromTo/LocalToModel" {
     var skeleton = try makeSkeleton(std.testing.allocator);
     defer skeleton.deinit();
     var aos = [_]math.Transform{
-        .{ .translation = .{ .x = 1 } },
-        .{ .translation = .{ .y = 2 } },
-        .{ .translation = .{ .z = 3 } },
-        .{ .translation = .{ .x = 4 } },
+        .{ .translation = .{ 1, 0, 0 } },
+        .{ .translation = .{ 0, 2, 0 } },
+        .{ .translation = .{ 0, 0, 3 } },
+        .{ .translation = .{ 4, 0, 0 } },
     };
     var input: [1]math.SoaTransform = undefined;
     math.aosToSoa(&aos, &input);
@@ -332,9 +332,9 @@ test "TransformationFromTo/LocalToModel" {
         math.Float4x4.identity,
     };
     try animation.localToModel(.{ .skeleton = &skeleton, .input = &input }, &output);
-    try h.expectFloat3(.{ .x = 1, .y = 2, .z = 3 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 1, 2, 3 }, math.Float4x4.translation(output[2]));
 
-    output[1] = math.Float4x4.fromTransform(.{ .translation = .{ .x = 10 } });
+    output[1] = math.Float4x4.fromTransform(.{ .translation = .{ 10, 0, 0 } });
     output[2] = math.Float4x4.identity;
     try animation.localToModel(.{
         .skeleton = &skeleton,
@@ -343,22 +343,22 @@ test "TransformationFromTo/LocalToModel" {
         .to = 2,
         .from_excluded = true,
     }, &output);
-    try h.expectFloat3(.{ .x = 10, .z = 3 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 10, 0, 3 }, math.Float4x4.translation(output[2]));
 }
 
 test "RangesAndExcludedRoot/LocalToModel" {
     var skeleton = try makeSkeleton(std.testing.allocator);
     defer skeleton.deinit();
     var local = [_]math.Transform{
-        .{ .translation = .{ .x = 1 } },
-        .{ .translation = .{ .y = 2 } },
-        .{ .translation = .{ .z = 3 } },
-        .{ .translation = .{ .x = 4 } },
+        .{ .translation = .{ 1, 0, 0 } },
+        .{ .translation = .{ 0, 2, 0 } },
+        .{ .translation = .{ 0, 0, 3 } },
+        .{ .translation = .{ 4, 0, 0 } },
     };
     var input: [1]math.SoaTransform = undefined;
     math.aosToSoa(&local, &input);
 
-    const untouched = math.Float4x4.fromTransform(.{ .translation = .{ .x = 99, .y = 99, .z = 99 } });
+    const untouched = math.Float4x4.fromTransform(.{ .translation = .{ 99, 99, 99 } });
     var output = [_]math.Float4x4{ untouched, untouched, untouched, untouched };
     try animation.localToModel(.{
         .skeleton = &skeleton,
@@ -366,17 +366,17 @@ test "RangesAndExcludedRoot/LocalToModel" {
         .from = 0,
         .to = 1,
     }, &output);
-    try h.expectFloat3(.{ .x = 1 }, math.Float4x4.translation(output[0]));
-    try h.expectFloat3(.{ .x = 1, .y = 2 }, math.Float4x4.translation(output[1]));
-    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[2]));
-    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[3]));
+    try h.expectFloat3(.{ 1, 0, 0 }, math.Float4x4.translation(output[0]));
+    try h.expectFloat3(.{ 1, 2, 0 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ 99, 99, 99 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 99, 99, 99 }, math.Float4x4.translation(output[3]));
 
     // Excluding `from` consumes its existing model matrix, allowing callers
     // to update descendants after an external parent/root update.
     output = .{ untouched, untouched, untouched, untouched };
     output[0] = math.Float4x4.fromTransform(.{
-        .translation = .{ .x = 10 },
-        .scale = .{ .x = 2, .y = 2, .z = 2 },
+        .translation = .{ 10, 0, 0 },
+        .scale = .{ 2, 2, 2 },
     });
     try animation.localToModel(.{
         .skeleton = &skeleton,
@@ -384,10 +384,10 @@ test "RangesAndExcludedRoot/LocalToModel" {
         .from = 0,
         .from_excluded = true,
     }, &output);
-    try h.expectFloat3(.{ .x = 10 }, math.Float4x4.translation(output[0]));
-    try h.expectFloat3(.{ .x = 10, .y = 4 }, math.Float4x4.translation(output[1]));
-    try h.expectFloat3(.{ .x = 10, .y = 4, .z = 6 }, math.Float4x4.translation(output[2]));
-    try h.expectFloat3(.{ .x = 18 }, math.Float4x4.translation(output[3]));
+    try h.expectFloat3(.{ 10, 0, 0 }, math.Float4x4.translation(output[0]));
+    try h.expectFloat3(.{ 10, 4, 0 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ 10, 4, 6 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 18, 0, 0 }, math.Float4x4.translation(output[3]));
 
     // A subtree update does not touch the later sibling branch.
     output[1] = untouched;
@@ -398,9 +398,9 @@ test "RangesAndExcludedRoot/LocalToModel" {
         .input = &input,
         .from = 1,
     }, &output);
-    try h.expectFloat3(.{ .x = 10, .y = 4 }, math.Float4x4.translation(output[1]));
-    try h.expectFloat3(.{ .x = 10, .y = 4, .z = 6 }, math.Float4x4.translation(output[2]));
-    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[3]));
+    try h.expectFloat3(.{ 10, 4, 0 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ 10, 4, 6 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 99, 99, 99 }, math.Float4x4.translation(output[3]));
 }
 
 test "Empty/LocalToModel" {
@@ -422,20 +422,20 @@ test "FullTRSAndRoot/LocalToModel" {
 
     const sqrt_half: f32 = @sqrt(0.5);
     var local = [_]math.Transform{
-        .{ .translation = .{ .x = 2, .y = 2, .z = 2 } },
+        .{ .translation = .{ 2, 2, 2 } },
         .{
             .rotation = .{ .y = sqrt_half, .w = sqrt_half },
         },
         .{
-            .translation = .{ .x = 1, .y = 2, .z = 4 },
-            .scale = .{ .x = 10, .y = 10, .z = 10 },
+            .translation = .{ 1, 2, 4 },
+            .scale = .{ 10, 10, 10 },
         },
         .{
-            .translation = .{ .x = -2, .y = -2, .z = -2 },
-            .scale = .{ .x = 10, .y = 10, .z = 10 },
+            .translation = .{ -2, -2, -2 },
+            .scale = .{ 10, 10, 10 },
         },
-        .{ .translation = .{ .x = 12, .y = 46, .z = -12 } },
-        .{ .scale = .{ .x = -0.1, .y = -0.1, .z = -0.1 } },
+        .{ .translation = .{ 12, 46, -12 } },
+        .{ .scale = .{ -0.1, -0.1, -0.1 } },
     };
     var input: [2]math.SoaTransform = undefined;
     math.aosToSoa(&local, &input);
@@ -454,7 +454,7 @@ test "FullTRSAndRoot/LocalToModel" {
         try expectFloat4x4(expected_matrix, actual_matrix);
     }
 
-    const root = math.Float4x4.fromTransform(.{ .translation = .{ .x = 4, .y = 3, .z = 2 } });
+    const root = math.Float4x4.fromTransform(.{ .translation = .{ 4, 3, 2 } });
     try animation.localToModel(.{
         .skeleton = &skeleton,
         .input = &input,
@@ -478,14 +478,14 @@ test "RangeBoundariesAndMultipleRoots/LocalToModel" {
     });
     defer skeleton.deinit();
     var local = [_]math.Transform{
-        .{ .translation = .{ .x = 1 } },
-        .{ .translation = .{ .y = 2 } },
-        .{ .translation = .{ .z = 3 } },
-        .{ .translation = .{ .x = 4 } },
+        .{ .translation = .{ 1, 0, 0 } },
+        .{ .translation = .{ 0, 2, 0 } },
+        .{ .translation = .{ 0, 0, 3 } },
+        .{ .translation = .{ 4, 0, 0 } },
     };
     var input: [1]math.SoaTransform = undefined;
     math.aosToSoa(&local, &input);
-    const sentinel = math.Float4x4.fromTransform(.{ .translation = .{ .x = 99 } });
+    const sentinel = math.Float4x4.fromTransform(.{ .translation = .{ 99, 0, 0 } });
     var output = [_]math.Float4x4{ sentinel, sentinel, sentinel, sentinel };
 
     // A bounded update is inclusive and cannot escape the selected subtree.
@@ -495,8 +495,8 @@ test "RangeBoundariesAndMultipleRoots/LocalToModel" {
         .from = 0,
         .to = 99,
     }, &output);
-    try h.expectFloat3(.{ .x = 1, .y = 2, .z = 3 }, math.Float4x4.translation(output[2]));
-    try h.expectFloat3(.{ .x = 99 }, math.Float4x4.translation(output[3]));
+    try h.expectFloat3(.{ 1, 2, 3 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ 99, 0, 0 }, math.Float4x4.translation(output[3]));
 
     // `to` before `from`, and an out-of-range `from`, are successful no-ops.
     output = .{ sentinel, sentinel, sentinel, sentinel };
@@ -519,7 +519,7 @@ test "RangeBoundariesAndMultipleRoots/LocalToModel" {
         .input = &input,
         .from = 3,
     }, &output);
-    try h.expectFloat3(.{ .x = 4 }, math.Float4x4.translation(output[3]));
+    try h.expectFloat3(.{ 4, 0, 0 }, math.Float4x4.translation(output[3]));
     for (output[0..3]) |matrix| try expectFloat4x4(sentinel, matrix);
 }
 
@@ -551,11 +551,11 @@ test "Float/TrackSamplingJob" {
 test "Run/MotionBlendingJob" {
     const sqrt_half: f32 = @sqrt(0.5);
     const first: math.Transform = .{
-        .translation = .{ .x = 2 },
+        .translation = .{ 2, 0, 0 },
         .rotation = .{ .x = sqrt_half, .w = sqrt_half },
     };
     const second: math.Transform = .{
-        .translation = .{ .z = 3 },
+        .translation = .{ 0, 0, 3 },
         // Same hemisphere correction case as upstream: the negative
         // quaternion represents the intended positive-y rotation.
         .rotation = .{ .y = -sqrt_half, .w = -sqrt_half },
@@ -572,7 +572,7 @@ test "Run/MotionBlendingJob" {
     }));
 
     const expected_blend: math.Transform = .{
-        .translation = .{ .x = 2.134313, .z = 0.533578 },
+        .translation = .{ 2.134313, 0, 0.533578 },
         .rotation = .{ .x = 0.6172133, .y = 0.1543033, .w = 0.7715167 },
     };
     try h.expectTransform(expected_blend, animation.blendMotion(&.{
@@ -590,43 +590,43 @@ test "Run/MotionBlendingJob" {
     }));
 
     var zero_length = first;
-    zero_length.translation = .zero;
+    zero_length.translation = @splat(0);
     var z_motion = second;
-    z_motion.translation = .{ .z = 2 };
+    z_motion.translation = .{ 0, 0, 2 };
     const zero_result = animation.blendMotion(&.{
         .{ .delta = zero_length, .weight = 0.8 },
         .{ .delta = z_motion, .weight = 0.2 },
     });
-    try h.expectFloat3(.{ .z = 0.4 }, zero_result.translation);
+    try h.expectFloat3(.{ 0, 0, 0.4 }, zero_result.translation);
     try h.expectQuaternion(expected_blend.rotation, zero_result.rotation);
-    try h.expectFloat3(.one, zero_result.scale);
+    try h.expectFloat3(@splat(1), zero_result.scale);
 
     var backward = first;
-    backward.translation = .{ .z = -2 };
+    backward.translation = .{ 0, 0, -2 };
     const opposed = animation.blendMotion(&.{
         .{ .delta = backward, .weight = 1 },
         .{ .delta = z_motion, .weight = 1 },
     });
-    try h.expectFloat3(.zero, opposed.translation);
+    try h.expectFloat3(@splat(0), opposed.translation);
     try h.expectQuaternion(
         .{ .x = 0.408248, .y = 0.408248, .w = 0.816496 },
         opposed.rotation,
     );
-    try h.expectFloat3(.one, opposed.scale);
+    try h.expectFloat3(@splat(1), opposed.scale);
 }
 
 test "Correction/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .{ .y = 1 },
+        .target = .{ 0, 1, 0 },
         .joint = .identity,
     });
     try std.testing.expect(result.reached);
-    try h.expectFloat3(.y_axis, math.Quaternion.rotate(result.correction, .x_axis));
+    try h.expectFloat3(.{ 0, 1, 0 }, math.Quaternion.rotate(result.correction, .{ 1, 0, 0 }));
 }
 
 test "Weight/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .{ .y = 1 },
+        .target = .{ 0, 1, 0 },
         .joint = .identity,
         .weight = 0,
     });
@@ -635,20 +635,20 @@ test "Weight/IKAimJob" {
 
 test "MidAxis/IKTwoBoneJob" {
     try std.testing.expectError(animation.Error.InvalidLayer, animation.twoBoneIk(.{
-        .target = .{ .x = 1 },
+        .target = .{ 1, 0, 0 },
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1 } }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
-        .mid_axis = .{ .x = 2 },
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 0, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
+        .mid_axis = .{ 2, 0, 0 },
     }));
 }
 
 test "Weight/IKTwoBoneJob" {
     const result = try animation.twoBoneIk(.{
-        .target = .{ .x = 1, .y = 1 },
+        .target = .{ 1, 1, 0 },
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1 } }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 0, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
         .weight = 0,
     });
     try h.expectQuaternion(.identity, result.start_correction);
@@ -686,7 +686,7 @@ test "JobValidity/BlendingJob" {
 
 test "Empty/BlendingJob" {
     var rest: [1]math.SoaTransform = undefined;
-    math.aosToSoa(&.{.{ .translation = .{ .x = 1 }, .scale = .{ .x = 2, .y = 3, .z = 4 } }}, &rest);
+    math.aosToSoa(&.{.{ .translation = .{ 1, 0, 0 }, .scale = .{ 2, 3, 4 } }}, &rest);
     var output: [1]math.SoaTransform = undefined;
     try animation.blend(.{ .rest_pose = &rest, .layers = &.{} }, &output);
     try h.expectTransform(math.soaLane(rest[0], 0), math.soaLane(output[0], 0));
@@ -695,8 +695,8 @@ test "Empty/BlendingJob" {
 test "Weight/BlendingJob" {
     var positive: [1]math.SoaTransform = undefined;
     var negative: [1]math.SoaTransform = undefined;
-    math.aosToSoa(&.{.{ .translation = .{ .x = 4 } }}, &positive);
-    math.aosToSoa(&.{.{ .translation = .{ .x = -4 } }}, &negative);
+    math.aosToSoa(&.{.{ .translation = .{ 4, 0, 0 } }}, &positive);
+    math.aosToSoa(&.{.{ .translation = .{ -4, 0, 0 } }}, &negative);
     var output: [1]math.SoaTransform = undefined;
     try animation.blend(.{
         .rest_pose = &.{math.SoaTransform.identity},
@@ -705,14 +705,14 @@ test "Weight/BlendingJob" {
             .{ .transforms = &negative, .weight = 0.75 },
         },
     }, &output);
-    try h.expectFloat(-2, math.soaLane(output[0], 0).translation.x);
+    try h.expectFloat(-2, math.soaLane(output[0], 0).translation[0]);
 }
 
 test "JointWeights/BlendingJob" {
     var pose: [1]math.SoaTransform = undefined;
     math.aosToSoa(&.{
-        .{ .translation = .{ .x = 2 } },
-        .{ .translation = .{ .x = 4 } },
+        .{ .translation = .{ 2, 0, 0 } },
+        .{ .translation = .{ 4, 0, 0 } },
     }, &pose);
     const weights: [1]math.SimdFloat4 = .{.{ 1, 0, 0, 0 }};
     var output: [1]math.SoaTransform = undefined;
@@ -720,15 +720,15 @@ test "JointWeights/BlendingJob" {
         .rest_pose = &.{math.SoaTransform.identity},
         .layers = &.{.{ .transforms = &pose, .weight = 1, .joint_weights = &weights }},
     }, &output);
-    try h.expectFloat(2, math.soaLane(output[0], 0).translation.x);
-    try h.expectFloat(0, math.soaLane(output[0], 1).translation.x);
+    try h.expectFloat(2, math.soaLane(output[0], 0).translation[0]);
+    try h.expectFloat(0, math.soaLane(output[0], 1).translation[0]);
 }
 
 test "Normalize/BlendingJob" {
     var a: [1]math.SoaTransform = undefined;
     var b: [1]math.SoaTransform = undefined;
-    math.aosToSoa(&.{.{ .translation = .{ .x = 2 } }}, &a);
-    math.aosToSoa(&.{.{ .translation = .{ .x = 4 } }}, &b);
+    math.aosToSoa(&.{.{ .translation = .{ 2, 0, 0 } }}, &a);
+    math.aosToSoa(&.{.{ .translation = .{ 4, 0, 0 } }}, &b);
     var output: [1]math.SoaTransform = undefined;
     try animation.blend(.{
         .rest_pose = &.{math.SoaTransform.identity},
@@ -737,29 +737,29 @@ test "Normalize/BlendingJob" {
             .{ .transforms = &b, .weight = 3 },
         },
     }, &output);
-    try h.expectFloat(3.2, math.soaLane(output[0], 0).translation.x);
+    try h.expectFloat(3.2, math.soaLane(output[0], 0).translation[0]);
 }
 
 test "Threshold/BlendingJob" {
     var rest: [1]math.SoaTransform = undefined;
     var pose: [1]math.SoaTransform = undefined;
-    math.aosToSoa(&.{.{ .translation = .{ .x = 10 } }}, &rest);
-    math.aosToSoa(&.{.{ .translation = .zero }}, &pose);
+    math.aosToSoa(&.{.{ .translation = .{ 10, 0, 0 } }}, &rest);
+    math.aosToSoa(&.{.{ .translation = @splat(0) }}, &pose);
     var output: [1]math.SoaTransform = undefined;
     try animation.blend(.{
         .rest_pose = &rest,
         .layers = &.{.{ .transforms = &pose, .weight = 0.05 }},
         .threshold = 0.1,
     }, &output);
-    try h.expectFloat(5, math.soaLane(output[0], 0).translation.x);
+    try h.expectFloat(5, math.soaLane(output[0], 0).translation[0]);
 }
 
 test "AdditiveWeight/BlendingJob" {
     var additive: [1]math.SoaTransform = undefined;
     math.aosToSoa(&.{.{
-        .translation = .{ .x = 4 },
-        .rotation = math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 2),
-        .scale = .{ .x = 2, .y = 2, .z = 2 },
+        .translation = .{ 4, 0, 0 },
+        .rotation = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 2),
+        .scale = .{ 2, 2, 2 },
     }}, &additive);
     var output: [1]math.SoaTransform = undefined;
     try animation.blend(.{
@@ -768,19 +768,19 @@ test "AdditiveWeight/BlendingJob" {
         .additive_layers = &.{.{ .transforms = &additive, .weight = 0.5 }},
     }, &output);
     const result = math.soaLane(output[0], 0);
-    try h.expectFloat(2, result.translation.x);
-    try h.expectFloat(1.5, result.scale.x);
+    try h.expectFloat(2, result.translation[0]);
+    try h.expectFloat(1.5, result.scale[0]);
     try h.expectFloat3(
-        .{ .x = @sqrt(@as(f32, 0.5)), .y = @sqrt(@as(f32, 0.5)) },
-        math.Quaternion.rotate(result.rotation, .x_axis),
+        .{ @sqrt(@as(f32, 0.5)), @sqrt(@as(f32, 0.5)), 0 },
+        math.Quaternion.rotate(result.rotation, .{ 1, 0, 0 }),
     );
 }
 
 test "AdditiveJointWeight/BlendingJob" {
     var additive: [1]math.SoaTransform = undefined;
     math.aosToSoa(&.{
-        .{ .translation = .{ .x = 4 }, .scale = .{ .x = 2, .y = 2, .z = 2 } },
-        .{ .translation = .{ .x = 8 }, .scale = .{ .x = 4, .y = 4, .z = 4 } },
+        .{ .translation = .{ 4, 0, 0 }, .scale = .{ 2, 2, 2 } },
+        .{ .translation = .{ 8, 0, 0 }, .scale = .{ 4, 4, 4 } },
     }, &additive);
     const weights: [1]math.SimdFloat4 = .{.{ 1, 0.5, 0, -1 }};
     var output: [1]math.SoaTransform = undefined;
@@ -789,8 +789,8 @@ test "AdditiveJointWeight/BlendingJob" {
         .layers = &.{},
         .additive_layers = &.{.{ .transforms = &additive, .weight = 0.5, .joint_weights = &weights }},
     }, &output);
-    try h.expectFloat(2, math.soaLane(output[0], 0).translation.x);
-    try h.expectFloat(2, math.soaLane(output[0], 1).translation.x);
+    try h.expectFloat(2, math.soaLane(output[0], 0).translation[0]);
+    try h.expectFloat(2, math.soaLane(output[0], 1).translation[0]);
 }
 
 test "JobValidityAdditive/BlendingJob" {
@@ -804,10 +804,10 @@ test "JobValidityAdditive/BlendingJob" {
 
 test "Sampling4Track2Keys/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
-        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 1 } } } },
-        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 2 } } } },
-        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 3 } } } },
-        .{ .translations = &.{ .{ .ratio = 0, .value = .zero }, .{ .ratio = 1, .value = .{ .x = 4 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = @splat(0) }, .{ .ratio = 1, .value = .{ 1, 0, 0 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = @splat(0) }, .{ .ratio = 1, .value = .{ 2, 0, 0 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = @splat(0) }, .{ .ratio = 1, .value = .{ 3, 0, 0 } } } },
+        .{ .translations = &.{ .{ .ratio = 0, .value = @splat(0) }, .{ .ratio = 1, .value = .{ 4, 0, 0 } } } },
     });
     defer value.deinit();
     var context = try animation.SamplingContext.init(std.testing.allocator, 4);
@@ -815,18 +815,18 @@ test "Sampling4Track2Keys/SamplingJob" {
     var output: [1]math.SoaTransform = undefined;
     try animation.sample(&value, 0.5, &context, &output);
     for (0..4) |lane| {
-        try h.expectFloat(@as(f32, @floatFromInt(lane + 1)) * 0.5, math.soaLane(output[0], lane).translation.x);
+        try h.expectFloat(@as(f32, @floatFromInt(lane + 1)) * 0.5, math.soaLane(output[0], lane).translation[0]);
     }
 }
 
 test "Cache/SamplingJob" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{.{
         .translations = &.{
-            .{ .ratio = 0, .value = .zero },
-            .{ .ratio = 0.25, .value = .{ .x = 1 } },
-            .{ .ratio = 0.5, .value = .{ .x = 2 } },
-            .{ .ratio = 0.75, .value = .{ .x = 3 } },
-            .{ .ratio = 1, .value = .{ .x = 4 } },
+            .{ .ratio = 0, .value = @splat(0) },
+            .{ .ratio = 0.25, .value = .{ 1, 0, 0 } },
+            .{ .ratio = 0.5, .value = .{ 2, 0, 0 } },
+            .{ .ratio = 0.75, .value = .{ 3, 0, 0 } },
+            .{ .ratio = 1, .value = .{ 4, 0, 0 } },
         },
     }});
     defer value.deinit();
@@ -835,7 +835,7 @@ test "Cache/SamplingJob" {
     var output: [1]math.SoaTransform = undefined;
     for ([_]f32{ 0.1, 0.6, 0.9, 0.2 }) |ratio| {
         try animation.sample(&value, ratio, &context, &output);
-        try h.expectFloat(ratio * 4, math.soaLane(output[0], 0).translation.x);
+        try h.expectFloat(ratio * 4, math.soaLane(output[0], 0).translation[0]);
     }
 }
 
@@ -852,13 +852,13 @@ test "CountKeyframes/AnimationUtils" {
     var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
         .{
             .translations = &.{
-                .{ .ratio = 0, .value = .zero },
-                .{ .ratio = 0.5, .value = .zero },
-                .{ .ratio = 1, .value = .zero },
+                .{ .ratio = 0, .value = @splat(0) },
+                .{ .ratio = 0.5, .value = @splat(0) },
+                .{ .ratio = 1, .value = @splat(0) },
             },
             .rotations = &.{.{ .ratio = 0.7, .value = .identity }},
         },
-        .{ .scales = &.{.{ .ratio = 0.1, .value = .one }} },
+        .{ .scales = &.{.{ .ratio = 0.1, .value = @splat(1) }} },
     });
     defer value.deinit();
     try std.testing.expectEqual(@as(usize, 3), animation.countTranslationKeyframes(value, null));
@@ -868,10 +868,10 @@ test "CountKeyframes/AnimationUtils" {
 }
 
 fn expectTrackValue(comptime T: type, expected: T, actual: T) !void {
-    if (T == math.Float2) {
-        try h.expectFloat(expected.x, actual.x);
-        try h.expectFloat(expected.y, actual.y);
-    } else if (T == math.Float3) {
+    if (T == math.Vec2f32) {
+        try h.expectFloat(expected[0], actual[0]);
+        try h.expectFloat(expected[1], actual[1]);
+    } else if (T == math.Vec3f32) {
         try h.expectFloat3(expected, actual);
     } else if (T == math.Float4) {
         try h.expectFloat(expected.x, actual.x);
@@ -884,7 +884,7 @@ fn expectTrackValue(comptime T: type, expected: T, actual: T) !void {
 }
 
 fn expectVectorTrackSampling(comptime T: type, key1: T, key2: T, first_midpoint: T, last_midpoint: T) !void {
-    const zero: T = .zero;
+    const zero: T = if (T == math.Float4) .zero else @splat(0);
     var track = try animation.Track(T).initMixed(std.testing.allocator, "", &.{
         .{ .ratio = 0, .value = zero },
         .{ .ratio = 0.5, .value = key1, .interpolation = .step },
@@ -903,11 +903,11 @@ fn expectVectorTrackSampling(comptime T: type, key1: T, key2: T, first_midpoint:
 }
 
 test "Float2/TrackSamplingJob" {
-    try expectVectorTrackSampling(math.Float2, .{ .x = 2.3, .y = 4.6 }, .{ .x = 4.6, .y = 9.2 }, .{ .x = 1.15, .y = 2.3 }, .{ .x = 2.3, .y = 4.6 });
+    try expectVectorTrackSampling(math.Vec2f32, .{ 2.3, 4.6 }, .{ 4.6, 9.2 }, .{ 1.15, 2.3 }, .{ 2.3, 4.6 });
 }
 
 test "Float3/TrackSamplingJob" {
-    try expectVectorTrackSampling(math.Float3, .{ .y = 2.3, .z = 4.6 }, .{ .y = 4.6, .z = 9.2 }, .{ .y = 1.15, .z = 2.3 }, .{ .y = 2.3, .z = 4.6 });
+    try expectVectorTrackSampling(math.Vec3f32, .{ 0, 2.3, 4.6 }, .{ 0, 4.6, 9.2 }, .{ 0, 1.15, 2.3 }, .{ 0, 2.3, 4.6 });
 }
 
 test "Float4/TrackSamplingJob" {
@@ -999,25 +999,25 @@ test "Empty/TrackEdgeTriggerJob" {
 
 test "Twist/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
         .twist_angle = @as(f32, std.math.pi) / 2,
     });
-    try h.expectFloat3(.z_axis, math.Quaternion.rotate(result.correction, .y_axis));
+    try h.expectFloat3(.{ 0, 0, 1 }, math.Quaternion.rotate(result.correction, .{ 0, 1, 0 }));
 }
 
 test "Offset/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .{ .x = 2, .y = 1 },
+        .target = .{ 2, 1, 0 },
         .joint = .identity,
-        .offset = .y_axis,
+        .offset = .{ 0, 1, 0 },
     });
     try std.testing.expect(result.reached);
 }
 
 test "TargetTooClose/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .zero,
+        .target = @splat(0),
         .joint = .identity,
     });
     try std.testing.expect(result.reached);
@@ -1028,30 +1028,30 @@ test "MatrixVariants/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const joints = [_]math.Float4x4{
         .identity,
-        math.Float4x4.fromTransform(.{ .translation = .y_axis }),
-        math.Float4x4.fromTransform(.{ .rotation = math.Quaternion.fromAxisAngle(.x_axis, pi / 3) }),
-        math.Float4x4.fromTransform(.{ .scale = .{ .x = 2, .y = 2, .z = 2 } }),
-        math.Float4x4.fromTransform(.{ .scale = .{ .x = 1, .y = 2, .z = 1 } }),
-        math.Float4x4.fromTransform(.{ .scale = .{ .x = -3, .y = -3, .z = -3 } }),
+        math.Float4x4.fromTransform(.{ .translation = .{ 0, 1, 0 } }),
+        math.Float4x4.fromTransform(.{ .rotation = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 3) }),
+        math.Float4x4.fromTransform(.{ .scale = .{ 2, 2, 2 } }),
+        math.Float4x4.fromTransform(.{ .scale = .{ 1, 2, 1 } }),
+        math.Float4x4.fromTransform(.{ .scale = .{ -3, -3, -3 } }),
     };
-    const local_targets = [_]math.Float3{
-        .x_axis,
-        .{ .x = -1 },
-        .z_axis,
-        .{ .z = -1 },
-        .{ .x = 1, .y = 1 },
-        .{ .x = 2, .y = 2 },
+    const local_targets = [_]math.Vec3f32{
+        .{ 1, 0, 0 },
+        .{ -1, 0, 0 },
+        .{ 0, 0, 1 },
+        .{ 0, 0, -1 },
+        .{ 1, 1, 0 },
+        .{ 2, 2, 0 },
     };
     const expected = [_]math.Quaternion{
         .identity,
-        math.Quaternion.fromAxisAngle(.y_axis, pi),
-        math.Quaternion.fromAxisAngle(.y_axis, -pi / 2),
-        math.Quaternion.fromAxisAngle(.y_axis, pi / 2),
-        math.Quaternion.fromAxisAngle(.z_axis, pi / 4),
-        math.Quaternion.fromAxisAngle(.z_axis, pi / 4),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, pi),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, -pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 4),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 4),
     };
     for (joints) |joint| {
-        const pole = math.Float4x4.transformVector(joint, .y_axis);
+        const pole = math.Float4x4.transformVector(joint, .{ 0, 1, 0 });
         for (local_targets, expected) |target, expected_correction| {
             const result = try animation.aimIk(.{
                 .target = math.Float4x4.transformPoint(joint, target),
@@ -1067,58 +1067,58 @@ test "MatrixVariants/IKAimJob" {
 test "ForwardUpPoleAndAlignment/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     var options: animation.AimOptions = .{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
     };
 
-    options.forward = .{ .x = -1 };
+    options.forward = .{ -1, 0, 0 };
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.y_axis, pi),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, pi),
         (try animation.aimIk(options)).correction,
     );
-    options.forward = .z_axis;
+    options.forward = .{ 0, 0, 1 };
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.y_axis, pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, pi / 2),
         (try animation.aimIk(options)).correction,
     );
 
-    options.forward = .x_axis;
-    options.up = .z_axis;
+    options.forward = .{ 1, 0, 0 };
+    options.up = .{ 0, 0, 1 };
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.x_axis, -pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, -pi / 2),
         (try animation.aimIk(options)).correction,
     );
-    options.up = .zero;
+    options.up = @splat(0);
     try h.expectQuaternion(.identity, (try animation.aimIk(options)).correction);
 
-    options.up = .y_axis;
-    options.pole_vector = .z_axis;
+    options.up = .{ 0, 1, 0 };
+    options.pole_vector = .{ 0, 0, 1 };
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.x_axis, pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 2),
         (try animation.aimIk(options)).correction,
     );
 
-    options.target = .y_axis;
-    options.pole_vector = .y_axis;
+    options.target = .{ 0, 1, 0 };
+    options.pole_vector = .{ 0, 1, 0 };
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, pi / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 2),
         (try animation.aimIk(options)).correction,
     );
 }
 
 test "JobValidity/IKAimJob" {
     try std.testing.expectError(animation.Error.InvalidLayer, animation.aimIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
-        .forward = .{ .x = 0.5 },
+        .forward = .{ 0.5, 0, 0 },
     }));
     try std.testing.expectError(animation.Error.InvalidLayer, animation.aimIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
-        .forward = .zero,
+        .forward = @splat(0),
     }));
     try std.testing.expect((try animation.aimIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
     })).reached);
 }
@@ -1126,19 +1126,19 @@ test "JobValidity/IKAimJob" {
 test "Up/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const cases = [_]struct {
-        up: math.Float3,
+        up: math.Vec3f32,
         expected: math.Quaternion,
     }{
-        .{ .up = .y_axis, .expected = .identity },
-        .{ .up = .{ .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi) },
-        .{ .up = .z_axis, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
-        .{ .up = .{ .z = 2 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
-        .{ .up = .{ .z = 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
-        .{ .up = .zero, .expected = .identity },
+        .{ .up = .{ 0, 1, 0 }, .expected = .identity },
+        .{ .up = .{ 0, -1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi) },
+        .{ .up = .{ 0, 0, 1 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, -pi / 2) },
+        .{ .up = .{ 0, 0, 2 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, -pi / 2) },
+        .{ .up = .{ 0, 0, 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, -pi / 2) },
+        .{ .up = @splat(0), .expected = .identity },
     };
     for (cases) |case| {
         try h.expectQuaternion(case.expected, (try animation.aimIk(.{
-            .target = .x_axis,
+            .target = .{ 1, 0, 0 },
             .joint = .identity,
             .up = case.up,
         })).correction);
@@ -1148,18 +1148,18 @@ test "Up/IKAimJob" {
 test "Pole/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const cases = [_]struct {
-        pole: math.Float3,
+        pole: math.Vec3f32,
         expected: math.Quaternion,
     }{
-        .{ .pole = .y_axis, .expected = .identity },
-        .{ .pole = .{ .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi) },
-        .{ .pole = .z_axis, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
-        .{ .pole = .{ .z = 2 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
-        .{ .pole = .{ .z = 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
+        .{ .pole = .{ 0, 1, 0 }, .expected = .identity },
+        .{ .pole = .{ 0, -1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi) },
+        .{ .pole = .{ 0, 0, 1 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 2) },
+        .{ .pole = .{ 0, 0, 2 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 2) },
+        .{ .pole = .{ 0, 0, 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 2) },
     };
     for (cases) |case| {
         try h.expectQuaternion(case.expected, (try animation.aimIk(.{
-            .target = .x_axis,
+            .target = .{ 1, 0, 0 },
             .joint = .identity,
             .pole_vector = case.pole,
         })).correction);
@@ -1169,13 +1169,13 @@ test "Pole/IKAimJob" {
 test "AlignedTargetUp/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const cases = [_]struct {
-        target: math.Float3,
+        target: math.Vec3f32,
         expected: math.Quaternion,
     }{
-        .{ .target = .x_axis, .expected = .identity },
-        .{ .target = .y_axis, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
-        .{ .target = .{ .y = 2 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
-        .{ .target = .{ .y = -2 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2) },
+        .{ .target = .{ 1, 0, 0 }, .expected = .identity },
+        .{ .target = .{ 0, 1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 2) },
+        .{ .target = .{ 0, 2, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 2) },
+        .{ .target = .{ 0, -2, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 2) },
     };
     for (cases) |case| {
         try h.expectQuaternion(case.expected, (try animation.aimIk(.{
@@ -1188,34 +1188,34 @@ test "AlignedTargetUp/IKAimJob" {
 test "AlignedTargetPole/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     try h.expectQuaternion(.identity, (try animation.aimIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .joint = .identity,
     })).correction);
-    try h.expectQuaternion(math.Quaternion.fromAxisAngle(.z_axis, pi / 2), (try animation.aimIk(.{
-        .target = .y_axis,
+    try h.expectQuaternion(math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 2), (try animation.aimIk(.{
+        .target = .{ 0, 1, 0 },
         .joint = .identity,
-        .pole_vector = .y_axis,
+        .pole_vector = .{ 0, 1, 0 },
     })).correction);
 }
 
 test "OffsetReachability/IKAimJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const cases = [_]struct {
-        offset: math.Float3,
+        offset: math.Vec3f32,
         expected: math.Quaternion,
         reached: bool,
     }{
-        .{ .offset = .zero, .expected = .identity, .reached = true },
-        .{ .offset = .{ .y = std.math.sqrt(0.5) }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 4), .reached = true },
-        .{ .offset = .{ .x = 0.5, .y = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 6), .reached = true },
-        .{ .offset = .{ .x = -0.5, .y = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 6), .reached = true },
-        .{ .offset = .{ .x = 0.5, .z = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.y_axis, pi / 6), .reached = true },
-        .{ .offset = .y_axis, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2), .reached = true },
-        .{ .offset = .{ .y = 2 }, .expected = .identity, .reached = false },
+        .{ .offset = @splat(0), .expected = .identity, .reached = true },
+        .{ .offset = .{ 0, std.math.sqrt(0.5), 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 4), .reached = true },
+        .{ .offset = .{ 0.5, 0.5, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 6), .reached = true },
+        .{ .offset = .{ -0.5, 0.5, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 6), .reached = true },
+        .{ .offset = .{ 0.5, 0, 0.5 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, pi / 6), .reached = true },
+        .{ .offset = .{ 0, 1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 2), .reached = true },
+        .{ .offset = .{ 0, 2, 0 }, .expected = .identity, .reached = false },
     };
     for (cases) |case| {
         const result = try animation.aimIk(.{
-            .target = .x_axis,
+            .target = .{ 1, 0, 0 },
             .joint = .identity,
             .offset = case.offset,
         });
@@ -1226,7 +1226,7 @@ test "OffsetReachability/IKAimJob" {
 
 test "ZeroLengthBoneChain/IKTwoBoneJob" {
     const result = try animation.twoBoneIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .start_joint = .identity,
         .mid_joint = .identity,
         .end_joint = .identity,
@@ -1236,79 +1236,79 @@ test "ZeroLengthBoneChain/IKTwoBoneJob" {
 
 test "StartJointCorrection/IKTwoBoneJob" {
     const result = try animation.twoBoneIk(.{
-        .target = .{ .x = 1, .y = 1 },
+        .target = .{ 1, 1, 0 },
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .x_axis }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 0, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
     });
     try std.testing.expect(math.Quaternion.dot(.identity, result.start_correction) < 0.999);
 }
 
-fn bentIkOptions(target: math.Float3) animation.TwoBoneOptions {
+fn bentIkOptions(target: math.Vec3f32) animation.TwoBoneOptions {
     return .{
         .target = target,
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .y_axis }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1, .y = 1 } }),
-        .mid_axis = .z_axis,
-        .pole_vector = .y_axis,
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 0, 1, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 1, 0 } }),
+        .mid_axis = .{ 0, 0, 1 },
+        .pole_vector = .{ 0, 1, 0 },
     };
 }
 
 test "MidAxisAndZeroTarget/IKTwoBoneJob" {
-    const unchanged = try animation.twoBoneIk(bentIkOptions(.{ .x = 1, .y = 1 }));
+    const unchanged = try animation.twoBoneIk(bentIkOptions(.{ 1, 1, 0 }));
     try h.expectQuaternion(.identity, unchanged.start_correction);
     try h.expectQuaternion(.identity, unchanged.mid_correction);
     try std.testing.expect(unchanged.reached);
 
-    var reversed_options = bentIkOptions(.{ .x = 1, .y = 1 });
-    reversed_options.mid_axis = .{ .z = -1 };
+    var reversed_options = bentIkOptions(.{ 1, 1, 0 });
+    reversed_options.mid_axis = .{ 0, 0, -1 };
     const reversed = try animation.twoBoneIk(reversed_options);
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.y_axis, @as(f32, std.math.pi)),
+        math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, @as(f32, std.math.pi)),
         reversed.start_correction,
     );
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi)),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi)),
         reversed.mid_correction,
     );
 
-    const folded = try animation.twoBoneIk(bentIkOptions(.zero));
+    const folded = try animation.twoBoneIk(bentIkOptions(@splat(0)));
     try h.expectQuaternion(.identity, folded.start_correction);
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, -@as(f32, std.math.pi) / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -@as(f32, std.math.pi) / 2),
         folded.mid_correction,
     );
     try std.testing.expect(!folded.reached);
 }
 
 test "SoftenReachability/IKTwoBoneJob" {
-    var options = bentIkOptions(.{ .x = 1 });
+    var options = bentIkOptions(.{ 1, 0, 0 });
     options.soften = 0.5;
     try std.testing.expect((try animation.twoBoneIk(options)).reached);
-    options.target = .{ .x = 1.2 };
+    options.target = .{ 1.2, 0, 0 };
     try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
-    options.target = .{ .x = 3 };
+    options.target = .{ 3, 0, 0 };
     options.soften = 1;
     try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
 }
 
 test "TwistAndZeroScale/IKTwoBoneJob" {
-    var twist_options = bentIkOptions(.{ .x = 1, .y = 1 });
+    var twist_options = bentIkOptions(.{ 1, 1, 0 });
     twist_options.twist_angle = @as(f32, std.math.pi) / 2;
     const twisted = try animation.twoBoneIk(twist_options);
     try h.expectQuaternion(
         math.Quaternion.fromAxisAngle(
-            math.Float3.normalize(.{ .x = 1, .y = 1 }),
+            math.vec.normalize(@as(math.Vec3f32, .{ 1, 1, 0 })),
             @as(f32, std.math.pi) / 2,
         ),
         twisted.start_correction,
     );
     try h.expectQuaternion(.identity, twisted.mid_correction);
 
-    const zero = math.Float4x4.fromTransform(.{ .scale = .zero });
+    const zero = math.Float4x4.fromTransform(.{ .scale = @splat(0) });
     const degenerate = try animation.twoBoneIk(.{
-        .target = .x_axis,
+        .target = .{ 1, 0, 0 },
         .start_joint = zero,
         .mid_joint = zero,
         .end_joint = zero,
@@ -1321,15 +1321,15 @@ test "TwistAndZeroScale/IKTwoBoneJob" {
 test "Pole/IKTwoBoneJob" {
     const pi: f32 = @floatCast(std.math.pi);
     const cases = [_]struct {
-        pole: math.Float3,
-        target: math.Float3,
+        pole: math.Vec3f32,
+        target: math.Vec3f32,
         expected: math.Quaternion,
     }{
-        .{ .pole = .y_axis, .target = .{ .x = 1, .y = 1 }, .expected = .identity },
-        .{ .pole = .z_axis, .target = .{ .x = 1, .z = 1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
-        .{ .pole = .{ .z = -1 }, .target = .{ .x = 1, .z = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
-        .{ .pole = .x_axis, .target = .{ .x = 1, .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2) },
-        .{ .pole = .{ .x = -1 }, .target = .{ .x = -1, .y = 1 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
+        .{ .pole = .{ 0, 1, 0 }, .target = .{ 1, 1, 0 }, .expected = .identity },
+        .{ .pole = .{ 0, 0, 1 }, .target = .{ 1, 0, 1 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, pi / 2) },
+        .{ .pole = .{ 0, 0, -1 }, .target = .{ 1, 0, -1 }, .expected = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, -pi / 2) },
+        .{ .pole = .{ 1, 0, 0 }, .target = .{ 1, -1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -pi / 2) },
+        .{ .pole = .{ -1, 0, 0 }, .target = .{ -1, 1, 0 }, .expected = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, pi / 2) },
     };
     for (cases) |case| {
         var options = bentIkOptions(case.target);
@@ -1343,35 +1343,35 @@ test "Pole/IKTwoBoneJob" {
 
 test "PoleTargetAlignment/IKTwoBoneJob" {
     const sqrt_two = @sqrt(@as(f32, 2));
-    var options = bentIkOptions(.{ .y = sqrt_two });
+    var options = bentIkOptions(.{ 0, sqrt_two, 0 });
     const aligned = try animation.twoBoneIk(options);
     try std.testing.expect(aligned.reached);
     try h.expectQuaternion(.identity, aligned.mid_correction);
 
-    options.target = .{ .x = 0.001, .y = sqrt_two };
+    options.target = .{ 0.001, sqrt_two, 0 };
     const offset = try animation.twoBoneIk(options);
     try std.testing.expect(offset.reached);
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 4),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 4),
         offset.start_correction,
     );
     try h.expectQuaternion(.identity, offset.mid_correction);
 
-    options.target = .{ .y = 3 };
+    options.target = .{ 0, 3, 0 };
     const extended = try animation.twoBoneIk(options);
     try std.testing.expect(!extended.reached);
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 2),
         extended.mid_correction,
     );
 }
 
 test "AlignedJointsAndTarget/IKTwoBoneJob" {
     const options: animation.TwoBoneOptions = .{
-        .target = .{ .x = 2 },
+        .target = .{ 2, 0, 0 },
         .start_joint = .identity,
-        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .x_axis }),
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .{ 1, 0, 0 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 2, 0, 0 } }),
     };
     const reachable = try animation.twoBoneIk(options);
     try std.testing.expect(reachable.reached);
@@ -1379,7 +1379,7 @@ test "AlignedJointsAndTarget/IKTwoBoneJob" {
     try h.expectQuaternion(.identity, reachable.mid_correction);
 
     var unreachable_options = options;
-    unreachable_options.target = .{ .x = 3 };
+    unreachable_options.target = .{ 3, 0, 0 };
     const beyond_reach = try animation.twoBoneIk(unreachable_options);
     try std.testing.expect(!beyond_reach.reached);
     try h.expectQuaternion(.identity, beyond_reach.start_correction);
@@ -1401,12 +1401,12 @@ test "SoftenBoundariesAndWeightClamp/IKTwoBoneJob" {
         .{ .distance = 3, .soften = 1, .reached = false },
     };
     for (cases) |case| {
-        var options = bentIkOptions(.{ .x = case.distance });
+        var options = bentIkOptions(.{ case.distance, 0, 0 });
         options.soften = case.soften;
         try std.testing.expectEqual(case.reached, (try animation.twoBoneIk(options)).reached);
     }
 
-    var options = bentIkOptions(.{ .x = 2 });
+    var options = bentIkOptions(.{ 2, 0, 0 });
     options.weight = 1.1;
     const above_one = try animation.twoBoneIk(options);
     try std.testing.expect(above_one.reached);
@@ -1422,22 +1422,22 @@ test "SoftenBoundariesAndWeightClamp/IKTwoBoneJob" {
 test "ParentScaleAndAlignedMid/IKTwoBoneJob" {
     const parents = [_]math.Transform{
         .{},
-        .{ .translation = .y_axis },
-        .{ .rotation = math.Quaternion.fromAxisAngle(.x_axis, @as(f32, std.math.pi) / 3) },
-        .{ .scale = .{ .x = 2, .y = 2, .z = 2 } },
-        .{ .scale = .{ .x = 1, .y = 2, .z = 1 } },
-        .{ .scale = .{ .x = -3, .y = -3, .z = -3 } },
+        .{ .translation = .{ 0, 1, 0 } },
+        .{ .rotation = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, @as(f32, std.math.pi) / 3) },
+        .{ .scale = .{ 2, 2, 2 } },
+        .{ .scale = .{ 1, 2, 1 } },
+        .{ .scale = .{ -3, -3, -3 } },
     };
-    const base_mid = math.Float4x4.fromTransform(.{ .translation = .y_axis });
-    const base_end = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1, .y = 1 } });
+    const base_mid = math.Float4x4.fromTransform(.{ .translation = .{ 0, 1, 0 } });
+    const base_end = math.Float4x4.fromTransform(.{ .translation = .{ 1, 1, 0 } });
     for (parents) |parent_transform| {
         const parent = math.Float4x4.fromTransform(parent_transform);
         const result = try animation.twoBoneIk(.{
-            .target = math.Float4x4.transformPoint(parent, .{ .x = 1, .y = 1 }),
+            .target = math.Float4x4.transformPoint(parent, .{ 1, 1, 0 }),
             .start_joint = parent,
             .mid_joint = math.Float4x4.mul(parent, base_mid),
             .end_joint = math.Float4x4.mul(parent, base_end),
-            .pole_vector = math.Float4x4.transformVector(parent, .y_axis),
+            .pole_vector = math.Float4x4.transformVector(parent, .{ 0, 1, 0 }),
         });
         try std.testing.expect(result.reached);
         try h.expectQuaternion(.identity, result.start_correction);
@@ -1445,23 +1445,23 @@ test "ParentScaleAndAlignedMid/IKTwoBoneJob" {
     }
 
     const aligned = try animation.twoBoneIk(.{
-        .target = .{ .x = 1, .y = 1 },
+        .target = .{ 1, 1, 0 },
         .start_joint = .identity,
         .mid_joint = base_mid,
-        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .y = 2 } }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ 0, 2, 0 } }),
     });
     try std.testing.expect(aligned.reached);
     try h.expectQuaternion(.identity, aligned.start_correction);
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(.z_axis, -@as(f32, std.math.pi) / 2),
+        math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, -@as(f32, std.math.pi) / 2),
         aligned.mid_correction,
     );
 }
 
 test "ZeroScale/IKAimJob" {
     const result = try animation.aimIk(.{
-        .target = .x_axis,
-        .joint = math.Float4x4.fromTransform(.{ .scale = .zero }),
+        .target = .{ 1, 0, 0 },
+        .joint = math.Float4x4.fromTransform(.{ .scale = @splat(0) }),
     });
     try h.expectQuaternion(.identity, result.correction);
     try std.testing.expect(!result.reached);
@@ -1472,11 +1472,11 @@ test "JointRestPose/SkeletonUtils" {
         .{
             .name = "root",
             .parent = animation.no_parent,
-            .rest_pose = .{ .translation = .{ .x = 4, .y = 5, .z = 6 } },
+            .rest_pose = .{ .translation = .{ 4, 5, 6 } },
         },
     });
     defer skeleton.deinit();
-    try h.expectFloat3(.{ .x = 4, .y = 5, .z = 6 }, skeleton.jointRestPose(0).translation);
+    try h.expectFloat3(.{ 4, 5, 6 }, skeleton.jointRestPose(0).translation);
 }
 
 fn expectEdges(

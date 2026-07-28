@@ -11,7 +11,8 @@ fn readFixture(allocator: std.mem.Allocator, relative: []const u8) ![]u8 {
 test "Versioning/SkeletonSerialize little endian" {
     const bytes = try readFixture(std.testing.allocator, "media/bin/versioning/skeleton_v2_le.ozz");
     defer std.testing.allocator.free(bytes);
-    var skeleton = try ozz.legacy.readSkeleton(std.testing.allocator, bytes, .{});
+    var reader = std.Io.Reader.fixed(bytes);
+    var skeleton = try ozz.legacy.readSkeleton(std.testing.allocator, &reader, .{});
     defer skeleton.deinit();
     try std.testing.expectEqual(@as(usize, 67), skeleton.numJoints());
     try std.testing.expectEqualStrings("Hips", skeleton.names[0]);
@@ -20,7 +21,8 @@ test "Versioning/SkeletonSerialize little endian" {
 test "Versioning/SkeletonSerialize big endian" {
     const bytes = try readFixture(std.testing.allocator, "media/bin/versioning/skeleton_v2_be.ozz");
     defer std.testing.allocator.free(bytes);
-    var skeleton = try ozz.legacy.readSkeleton(std.testing.allocator, bytes, .{});
+    var reader = std.Io.Reader.fixed(bytes);
+    var skeleton = try ozz.legacy.readSkeleton(std.testing.allocator, &reader, .{});
     defer skeleton.deinit();
     try std.testing.expectEqual(@as(usize, 67), skeleton.numJoints());
     try std.testing.expectEqualStrings("Hips", skeleton.names[0]);
@@ -29,9 +31,10 @@ test "Versioning/SkeletonSerialize big endian" {
 test "Versioning/SkeletonSerialize unsupported" {
     const bytes = try readFixture(std.testing.allocator, "media/bin/versioning/skeleton_v1_le.ozz");
     defer std.testing.allocator.free(bytes);
+    var reader = std.Io.Reader.fixed(bytes);
     try std.testing.expectError(
         ozz.legacy.Error.UnsupportedVersion,
-        ozz.legacy.readSkeleton(std.testing.allocator, bytes, .{}),
+        ozz.legacy.readSkeleton(std.testing.allocator, &reader, .{}),
     );
 }
 
@@ -42,12 +45,12 @@ test "Write/SkeletonSerialize C++ compatible" {
             .name = "root",
             .parent = ozz.animation.no_parent,
             .rest_pose = .{
-                .translation = .{ .x = 1, .y = 2, .z = 3 },
-                .rotation = ozz.math.Quaternion.fromAxisAngle(.y_axis, 0.7),
-                .scale = .{ .x = 2, .y = 3, .z = 4 },
+                .translation = .{ 1, 2, 3 },
+                .rotation = ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 0.7),
+                .scale = .{ 2, 3, 4 },
             },
         },
-        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .x_axis } },
+        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ 1, 0, 0 } } },
     });
     defer skeleton.deinit();
 
@@ -56,7 +59,8 @@ test "Write/SkeletonSerialize C++ compatible" {
         defer bytes.deinit();
         try ozz.legacy.writeSkeleton(&bytes.writer, skeleton, .{ .endian = endian });
         try std.testing.expectEqual(ozz.legacy.Kind.skeleton, try ozz.legacy.detect(bytes.writer.buffered()));
-        var decoded = try ozz.legacy.readSkeleton(allocator, bytes.writer.buffered(), .{});
+        var reader = std.Io.Reader.fixed(bytes.writer.buffered());
+        var decoded = try ozz.legacy.readSkeleton(allocator, &reader, .{});
         defer decoded.deinit();
         try std.testing.expectEqualSlices(i16, skeleton.parents, decoded.parents);
         for (skeleton.names, decoded.names) |expected, actual| {
@@ -71,7 +75,8 @@ test "Write/SkeletonSerialize C++ compatible" {
 test "Versioning/AnimationSerialize little endian" {
     const bytes = try readFixture(std.testing.allocator, "media/bin/versioning/animation_v7_le.ozz");
     defer std.testing.allocator.free(bytes);
-    var animation = try ozz.legacy.readAnimation(std.testing.allocator, bytes, .{});
+    var reader = std.Io.Reader.fixed(bytes);
+    var animation = try ozz.legacy.readAnimation(std.testing.allocator, &reader, .{});
     defer animation.deinit();
     try std.testing.expectEqual(@as(usize, 67), animation.numTracks());
     try h.expectFloat(0.66666667, animation.duration);
@@ -81,7 +86,8 @@ test "Versioning/AnimationSerialize little endian" {
 test "Versioning/AnimationSerialize big endian" {
     const bytes = try readFixture(std.testing.allocator, "media/bin/versioning/animation_v7_be.ozz");
     defer std.testing.allocator.free(bytes);
-    var animation = try ozz.legacy.readAnimation(std.testing.allocator, bytes, .{});
+    var reader = std.Io.Reader.fixed(bytes);
+    var animation = try ozz.legacy.readAnimation(std.testing.allocator, &reader, .{});
     defer animation.deinit();
     try std.testing.expectEqual(@as(usize, 67), animation.numTracks());
     try h.expectFloat(0.66666667, animation.duration);
@@ -98,9 +104,10 @@ test "Versioning/AnimationSerialize unsupported versions" {
         defer std.testing.allocator.free(relative);
         const bytes = try readFixture(std.testing.allocator, relative);
         defer std.testing.allocator.free(bytes);
+        var reader = std.Io.Reader.fixed(bytes);
         try std.testing.expectError(
             ozz.legacy.Error.UnsupportedVersion,
-            ozz.legacy.readAnimation(std.testing.allocator, bytes, .{}),
+            ozz.legacy.readAnimation(std.testing.allocator, &reader, .{}),
         );
     }
 }
@@ -110,7 +117,8 @@ test "Versioning/RawSkeletonSerialize" {
         const relative = "media/bin/versioning/" ++ name;
         const bytes = try readFixture(std.testing.allocator, relative);
         defer std.testing.allocator.free(bytes);
-        var skeleton = try ozz.legacy.readRawSkeleton(std.testing.allocator, bytes, .{});
+        var reader = std.Io.Reader.fixed(bytes);
+        var skeleton = try ozz.legacy.readRawSkeleton(std.testing.allocator, &reader, .{});
         defer skeleton.deinit();
         try std.testing.expectEqual(@as(usize, 67), skeleton.numJoints());
         try std.testing.expectEqualStrings("Hips", skeleton.roots[0].name);
@@ -122,7 +130,8 @@ test "Versioning/RawAnimationSerialize" {
         const relative = "media/bin/versioning/" ++ name;
         const bytes = try readFixture(std.testing.allocator, relative);
         defer std.testing.allocator.free(bytes);
-        var animation = try ozz.legacy.readRawAnimation(std.testing.allocator, bytes, .{});
+        var reader = std.Io.Reader.fixed(bytes);
+        var animation = try ozz.legacy.readRawAnimation(std.testing.allocator, &reader, .{});
         defer animation.deinit();
         try std.testing.expectEqual(@as(usize, 67), animation.tracks.len);
         try h.expectFloat(0.66666667, animation.duration);
@@ -134,7 +143,7 @@ test "Empty/Filled native archive round trips" {
     const allocator = std.testing.allocator;
     var skeleton = try ozz.animation.Skeleton.init(allocator, &.{
         .{ .name = "root", .parent = ozz.animation.no_parent },
-        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ .x = 2 } } },
+        .{ .name = "child", .parent = 0, .rest_pose = .{ .translation = .{ 2, 0, 0 } } },
     });
     defer skeleton.deinit();
 
@@ -214,7 +223,7 @@ test "Native archive framing and payload rejection" {
     defer bytes.deinit();
     try bytes.writer.writeAll(ozz.io.magic);
     try bytes.writer.writeInt(u16, ozz.io.container_version + 1, .little);
-    try bytes.writer.writeInt(u16, @backingInt(ozz.io.ObjectKind.skeleton), .little);
+    try bytes.writer.writeInt(u16, @intFromEnum(ozz.io.ObjectKind.skeleton), .little);
     try bytes.writer.writeInt(u32, 1, .little);
     try bytes.writer.writeInt(u64, 0, .little);
     var version_reader = std.Io.Reader.fixed(bytes.writer.buffered());
@@ -301,11 +310,11 @@ test "FilledFloat/TrackSerialize" {
 }
 
 test "FilledFloat2/TrackSerialize" {
-    try roundTripTrack(ozz.math.Float2, .{ .x = 4, .y = 6 });
+    try roundTripTrack(ozz.math.Vec2f32, .{ 4, 6 });
 }
 
 test "FilledFloat3/TrackSerialize" {
-    try roundTripTrack(ozz.math.Float3, .{ .x = 4, .y = 6, .z = 8 });
+    try roundTripTrack(ozz.math.Vec3f32, .{ 4, 6, 8 });
 }
 
 test "FilledFloat4/TrackSerialize" {
@@ -313,7 +322,7 @@ test "FilledFloat4/TrackSerialize" {
 }
 
 test "FilledQuaternion/TrackSerialize" {
-    try roundTripTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.y_axis, 0.7));
+    try roundTripTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 0.7));
 }
 
 fn roundTripRawTrack(comptime T: type, value: T) !void {
@@ -339,11 +348,11 @@ test "Filled/RawAnimationSerialize float" {
 }
 
 test "Float2/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Float2, .{ .x = 1, .y = 2 });
+    try roundTripRawTrack(ozz.math.Vec2f32, .{ 1, 2 });
 }
 
 test "Float3/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Float3, .{ .x = 1, .y = 2, .z = 3 });
+    try roundTripRawTrack(ozz.math.Vec3f32, .{ 1, 2, 3 });
 }
 
 test "Float4/RawAnimationSerialize" {
@@ -351,5 +360,5 @@ test "Float4/RawAnimationSerialize" {
 }
 
 test "Quaternion/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.x_axis, 0.4));
+    try roundTripRawTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, 0.4));
 }

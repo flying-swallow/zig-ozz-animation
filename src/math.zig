@@ -3,143 +3,10 @@ const caliper = @import("caliper");
 
 pub const epsilon: f32 = 1e-6;
 
-pub const Float2 = extern struct {
-    x: f32 = 0,
-    y: f32 = 0,
-
-    pub const zero: Float2 = .{};
-    pub const one: Float2 = .{ .x = 1, .y = 1 };
-
-    pub fn add(a: Float2, b: Float2) Float2 {
-        return .{ .x = a.x + b.x, .y = a.y + b.y };
-    }
-    pub fn sub(a: Float2, b: Float2) Float2 {
-        return .{ .x = a.x - b.x, .y = a.y - b.y };
-    }
-    pub fn mul(a: Float2, b: Float2) Float2 {
-        return .{ .x = a.x * b.x, .y = a.y * b.y };
-    }
-    pub fn div(a: Float2, b: Float2) Float2 {
-        return .{ .x = a.x / b.x, .y = a.y / b.y };
-    }
-    pub fn negate(v: Float2) Float2 {
-        return .{ .x = -v.x, .y = -v.y };
-    }
-    pub fn scale(v: Float2, s: f32) Float2 {
-        return .{ .x = v.x * s, .y = v.y * s };
-    }
-    pub fn lengthSquared(v: Float2) f32 {
-        return dot(v, v);
-    }
-    pub fn length(v: Float2) f32 {
-        return @sqrt(lengthSquared(v));
-    }
-    pub fn normalize(v: Float2) Float2 {
-        const len = length(v);
-        return if (len > epsilon) scale(v, 1 / len) else zero;
-    }
-    pub fn normalizeSafe(v: Float2, fallback: Float2) Float2 {
-        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
-    }
-    pub fn isNormalized(v: Float2) bool {
-        return @abs(lengthSquared(v) - 1) <= epsilon;
-    }
-    pub fn min(a: Float2, b: Float2) Float2 {
-        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y) };
-    }
-    pub fn max(a: Float2, b: Float2) Float2 {
-        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y) };
-    }
-    pub fn clamp(v: Float2, lower: Float2, upper: Float2) Float2 {
-        return min(max(v, lower), upper);
-    }
-    pub fn approxEq(a: Float2, b: Float2, tolerance: f32) bool {
-        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance;
-    }
-    pub fn dot(a: Float2, b: Float2) f32 {
-        return a.x * b.x + a.y * b.y;
-    }
-    pub fn lerp(a: Float2, b: Float2, t: f32) Float2 {
-        return add(a, scale(.{ .x = b.x - a.x, .y = b.y - a.y }, t));
-    }
-};
-
-pub const Float3 = extern struct {
-    x: f32 = 0,
-    y: f32 = 0,
-    z: f32 = 0,
-
-    pub const zero: Float3 = .{};
-    pub const one: Float3 = .{ .x = 1, .y = 1, .z = 1 };
-    pub const x_axis: Float3 = .{ .x = 1 };
-    pub const y_axis: Float3 = .{ .y = 1 };
-    pub const z_axis: Float3 = .{ .z = 1 };
-
-    pub fn add(a: Float3, b: Float3) Float3 {
-        return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
-    }
-    pub fn sub(a: Float3, b: Float3) Float3 {
-        return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z };
-    }
-    pub fn mul(a: Float3, b: Float3) Float3 {
-        return .{ .x = a.x * b.x, .y = a.y * b.y, .z = a.z * b.z };
-    }
-    pub fn div(a: Float3, b: Float3) Float3 {
-        return .{ .x = a.x / b.x, .y = a.y / b.y, .z = a.z / b.z };
-    }
-    pub fn negate(v: Float3) Float3 {
-        return .{ .x = -v.x, .y = -v.y, .z = -v.z };
-    }
-    pub fn scale(v: Float3, s: f32) Float3 {
-        return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s };
-    }
-    pub fn dot(a: Float3, b: Float3) f32 {
-        return caliper.vec.dot(asVec(a), asVec(b));
-    }
-    pub fn cross(a: Float3, b: Float3) Float3 {
-        return fromVec(caliper.vec.cross(asVec(a), asVec(b)));
-    }
-    pub fn lengthSquared(v: Float3) f32 {
-        return dot(v, v);
-    }
-    pub fn length(v: Float3) f32 {
-        return caliper.vec.norm(asVec(v));
-    }
-    pub fn normalize(v: Float3) Float3 {
-        const len = length(v);
-        return if (len > epsilon) fromVec(caliper.vec.normalize(asVec(v))) else zero;
-    }
-    pub fn normalizeSafe(v: Float3, fallback: Float3) Float3 {
-        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
-    }
-    pub fn isNormalized(v: Float3) bool {
-        return @abs(lengthSquared(v) - 1) <= epsilon;
-    }
-    pub fn min(a: Float3, b: Float3) Float3 {
-        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y), .z = @min(a.z, b.z) };
-    }
-    pub fn max(a: Float3, b: Float3) Float3 {
-        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y), .z = @max(a.z, b.z) };
-    }
-    pub fn clamp(v: Float3, lower: Float3, upper: Float3) Float3 {
-        return min(max(v, lower), upper);
-    }
-    pub fn approxEq(a: Float3, b: Float3, tolerance: f32) bool {
-        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance and
-            @abs(a.z - b.z) <= tolerance;
-    }
-    pub fn lerp(a: Float3, b: Float3, t: f32) Float3 {
-        return add(a, scale(sub(b, a), t));
-    }
-
-    pub fn asVec(v: Float3) caliper.Vec3f32 {
-        return .{ v.x, v.y, v.z };
-    }
-
-    pub fn fromVec(v: caliper.Vec3f32) Float3 {
-        return .{ .x = v[0], .y = v[1], .z = v[2] };
-    }
-};
+pub const Vec2f32 = caliper.Vec2f32;
+pub const Vec3f32 = caliper.Vec3f32;
+pub const vec = caliper.vec;
+pub const approx = caliper.approx;
 
 pub const Float4 = extern struct {
     x: f32 = 0,
@@ -249,8 +116,8 @@ pub const Quaternion = extern struct {
     pub fn mul(a: Quaternion, b: Quaternion) Quaternion {
         return fromVec(caliper.quat.mul(asVec(a), asVec(b)));
     }
-    pub fn rotate(q: Quaternion, v: Float3) Float3 {
-        return Float3.fromVec(caliper.quat.rotate_vector(asVec(q), Float3.asVec(v)));
+    pub fn rotate(q: Quaternion, v: Vec3f32) Vec3f32 {
+        return caliper.quat.rotate_vector(asVec(q), v);
     }
     pub fn nlerp(a: Quaternion, b_in: Quaternion, t: f32) Quaternion {
         var b = b_in;
@@ -279,19 +146,23 @@ pub const Quaternion = extern struct {
         const b_weight = @sin(t * angle) / sin_angle;
         return add(scale(a, cos_angle), scale(b, b_weight));
     }
-    pub fn fromAxisAngle(axis_in: Float3, angle: f32) Quaternion {
-        const axis = Float3.normalize(axis_in);
-        return fromVec(caliper.quat.from_rotation(Float3.asVec(axis), angle));
+    pub fn fromAxisAngle(axis_in: Vec3f32, angle: f32) Quaternion {
+        const axis_length = vec.norm(axis_in);
+        const axis: Vec3f32 = if (axis_length > epsilon)
+            vec.scale(axis_in, 1 / axis_length)
+        else
+            @splat(0);
+        return fromVec(caliper.quat.from_rotation(axis, angle));
     }
-    pub fn fromAxisCosAngle(axis: Float3, cosine: f32) Quaternion {
+    pub fn fromAxisCosAngle(axis: Vec3f32, cosine: f32) Quaternion {
         return fromAxisAngle(axis, std.math.acos(std.math.clamp(cosine, -1, 1)));
     }
 
     /// Builds a quaternion from intrinsic XYZ Euler rotations.
-    pub fn fromEuler(euler: Float3) Quaternion {
-        const hx = euler.x * 0.5;
-        const hy = euler.y * 0.5;
-        const hz = euler.z * 0.5;
+    pub fn fromEuler(euler: Vec3f32) Quaternion {
+        const hx = euler[0] * 0.5;
+        const hy = euler[1] * 0.5;
+        const hz = euler[2] * 0.5;
         const sx = @sin(hx);
         const cx = @cos(hx);
         const sy = @sin(hy);
@@ -307,7 +178,7 @@ pub const Quaternion = extern struct {
     }
 
     /// Returns intrinsic XYZ Euler rotations.
-    pub fn toEuler(q_in: Quaternion) Float3 {
+    pub fn toEuler(q_in: Quaternion) Vec3f32 {
         const q = normalize(q_in);
         const sin_x = 2 * (q.w * q.x - q.y * q.z);
         const cos_x = 1 - 2 * (q.x * q.x + q.y * q.y);
@@ -315,9 +186,9 @@ pub const Quaternion = extern struct {
         const sin_z = 2 * (q.w * q.z - q.x * q.y);
         const cos_z = 1 - 2 * (q.y * q.y + q.z * q.z);
         return .{
-            .x = std.math.atan2(sin_x, cos_x),
-            .y = std.math.asin(sin_y),
-            .z = std.math.atan2(sin_z, cos_z),
+            std.math.atan2(sin_x, cos_x),
+            std.math.asin(sin_y),
+            std.math.atan2(sin_z, cos_z),
         };
     }
 
@@ -329,37 +200,37 @@ pub const Quaternion = extern struct {
         return .{ .x = q[0], .y = q[1], .z = q[2], .w = q[3] };
     }
 
-    pub fn fromTo(from: Float3, to: Float3) Quaternion {
-        if (Float3.lengthSquared(from) <= epsilon or Float3.lengthSquared(to) <= epsilon) {
+    pub fn fromTo(from: Vec3f32, to: Vec3f32) Quaternion {
+        if (vec.norm_sqr(from) <= epsilon or vec.norm_sqr(to) <= epsilon) {
             return identity;
         }
         return fromVec(caliper.quat.from_to(
-            caliper.vec.normalize(Float3.asVec(from)),
-            caliper.vec.normalize(Float3.asVec(to)),
+            caliper.vec.normalize(from),
+            caliper.vec.normalize(to),
         ));
     }
 };
 
-pub const Transform = extern struct {
-    translation: Float3 = .zero,
+pub const Transform = struct {
+    translation: Vec3f32 = .{ 0, 0, 0 },
     rotation: Quaternion = .identity,
-    scale: Float3 = .one,
+    scale: Vec3f32 = .{ 1, 1, 1 },
 
     pub const identity: Transform = .{};
 
     pub fn combine(parent: Transform, local: Transform) Transform {
-        const scaled = Float3.mul(parent.scale, local.translation);
+        const scaled = vec.mul(parent.scale, local.translation);
         return .{
-            .translation = Float3.add(parent.translation, Quaternion.rotate(parent.rotation, scaled)),
+            .translation = vec.add(parent.translation, Quaternion.rotate(parent.rotation, scaled)),
             .rotation = Quaternion.normalize(Quaternion.mul(parent.rotation, local.rotation)),
-            .scale = Float3.mul(parent.scale, local.scale),
+            .scale = vec.mul(parent.scale, local.scale),
         };
     }
     pub fn lerp(a: Transform, b: Transform, t: f32) Transform {
         return .{
-            .translation = Float3.lerp(a.translation, b.translation, t),
+            .translation = approx.lerp_exact(a.translation, b.translation, t),
             .rotation = Quaternion.nlerp(a.rotation, b.rotation, t),
-            .scale = Float3.lerp(a.scale, b.scale, t),
+            .scale = approx.lerp_exact(a.scale, b.scale, t),
         };
     }
 };
@@ -383,11 +254,11 @@ pub const SoaFloat3 = struct {
     y: SimdFloat4,
     z: SimdFloat4,
 
-    pub fn splat(v: Float3) SoaFloat3 {
+    pub fn splat(v: Vec3f32) SoaFloat3 {
         return .{
-            .x = @splat(v.x),
-            .y = @splat(v.y),
-            .z = @splat(v.z),
+            .x = @splat(v[0]),
+            .y = @splat(v[1]),
+            .z = @splat(v[2]),
         };
     }
 };
@@ -409,9 +280,9 @@ pub const SoaTransform = struct {
     scale: SoaFloat3,
 
     pub const identity: SoaTransform = .{
-        .translation = SoaFloat3.splat(.zero),
+        .translation = SoaFloat3.splat(.{ 0, 0, 0 }),
         .rotation = SoaQuaternion.splat(.identity),
-        .scale = SoaFloat3.splat(.one),
+        .scale = SoaFloat3.splat(.{ 1, 1, 1 }),
     };
 };
 
@@ -422,16 +293,16 @@ pub fn aosToSoa(input: []const Transform, output: []SoaTransform) void {
             const index = group * 4 + lane_index;
             if (index >= input.len) break;
             const t = input[index];
-            setLane(&soa.translation.x, lane_index, t.translation.x);
-            setLane(&soa.translation.y, lane_index, t.translation.y);
-            setLane(&soa.translation.z, lane_index, t.translation.z);
+            setLane(&soa.translation.x, lane_index, t.translation[0]);
+            setLane(&soa.translation.y, lane_index, t.translation[1]);
+            setLane(&soa.translation.z, lane_index, t.translation[2]);
             setLane(&soa.rotation.x, lane_index, t.rotation.x);
             setLane(&soa.rotation.y, lane_index, t.rotation.y);
             setLane(&soa.rotation.z, lane_index, t.rotation.z);
             setLane(&soa.rotation.w, lane_index, t.rotation.w);
-            setLane(&soa.scale.x, lane_index, t.scale.x);
-            setLane(&soa.scale.y, lane_index, t.scale.y);
-            setLane(&soa.scale.z, lane_index, t.scale.z);
+            setLane(&soa.scale.x, lane_index, t.scale[0]);
+            setLane(&soa.scale.y, lane_index, t.scale[1]);
+            setLane(&soa.scale.z, lane_index, t.scale[2]);
         }
     }
 }
@@ -439,9 +310,9 @@ pub fn aosToSoa(input: []const Transform, output: []SoaTransform) void {
 pub fn soaLane(input: SoaTransform, index: usize) Transform {
     return .{
         .translation = .{
-            .x = lane(input.translation.x, index),
-            .y = lane(input.translation.y, index),
-            .z = lane(input.translation.z, index),
+            lane(input.translation.x, index),
+            lane(input.translation.y, index),
+            lane(input.translation.z, index),
         },
         .rotation = .{
             .x = lane(input.rotation.x, index),
@@ -450,24 +321,24 @@ pub fn soaLane(input: SoaTransform, index: usize) Transform {
             .w = lane(input.rotation.w, index),
         },
         .scale = .{
-            .x = lane(input.scale.x, index),
-            .y = lane(input.scale.y, index),
-            .z = lane(input.scale.z, index),
+            lane(input.scale.x, index),
+            lane(input.scale.y, index),
+            lane(input.scale.z, index),
         },
     };
 }
 
 pub fn setSoaLane(output: *SoaTransform, index: usize, t: Transform) void {
-    setLane(&output.translation.x, index, t.translation.x);
-    setLane(&output.translation.y, index, t.translation.y);
-    setLane(&output.translation.z, index, t.translation.z);
+    setLane(&output.translation.x, index, t.translation[0]);
+    setLane(&output.translation.y, index, t.translation[1]);
+    setLane(&output.translation.z, index, t.translation[2]);
     setLane(&output.rotation.x, index, t.rotation.x);
     setLane(&output.rotation.y, index, t.rotation.y);
     setLane(&output.rotation.z, index, t.rotation.z);
     setLane(&output.rotation.w, index, t.rotation.w);
-    setLane(&output.scale.x, index, t.scale.x);
-    setLane(&output.scale.y, index, t.scale.y);
-    setLane(&output.scale.z, index, t.scale.z);
+    setLane(&output.scale.x, index, t.scale[0]);
+    setLane(&output.scale.y, index, t.scale[1]);
+    setLane(&output.scale.z, index, t.scale[2]);
 }
 
 pub const Float4x4 = extern struct {
@@ -492,10 +363,10 @@ pub const Float4x4 = extern struct {
         const wy = q.w * q.y;
         const wz = q.w * q.z;
         return .{ .cols = .{
-            .{ (1 - 2 * (yy + zz)) * t.scale.x, (2 * (xy + wz)) * t.scale.x, (2 * (xz - wy)) * t.scale.x, 0 },
-            .{ (2 * (xy - wz)) * t.scale.y, (1 - 2 * (xx + zz)) * t.scale.y, (2 * (yz + wx)) * t.scale.y, 0 },
-            .{ (2 * (xz + wy)) * t.scale.z, (2 * (yz - wx)) * t.scale.z, (1 - 2 * (xx + yy)) * t.scale.z, 0 },
-            .{ t.translation.x, t.translation.y, t.translation.z, 1 },
+            .{ (1 - 2 * (yy + zz)) * t.scale[0], (2 * (xy + wz)) * t.scale[0], (2 * (xz - wy)) * t.scale[0], 0 },
+            .{ (2 * (xy - wz)) * t.scale[1], (1 - 2 * (xx + zz)) * t.scale[1], (2 * (yz + wx)) * t.scale[1], 0 },
+            .{ (2 * (xz + wy)) * t.scale[2], (2 * (yz - wx)) * t.scale[2], (1 - 2 * (xx + yy)) * t.scale[2], 0 },
+            .{ t.translation[0], t.translation[1], t.translation[2], 1 },
         } };
     }
 
@@ -512,71 +383,58 @@ pub const Float4x4 = extern struct {
         return .{ .cols = cm.inverse().items };
     }
 
-    pub fn transformPoint(m: Float4x4, p: Float3) Float3 {
+    pub fn transformPoint(m: Float4x4, p: Vec3f32) Vec3f32 {
         return .{
-            .x = m.cols[0][0] * p.x + m.cols[1][0] * p.y + m.cols[2][0] * p.z + m.cols[3][0],
-            .y = m.cols[0][1] * p.x + m.cols[1][1] * p.y + m.cols[2][1] * p.z + m.cols[3][1],
-            .z = m.cols[0][2] * p.x + m.cols[1][2] * p.y + m.cols[2][2] * p.z + m.cols[3][2],
+            m.cols[0][0] * p[0] + m.cols[1][0] * p[1] + m.cols[2][0] * p[2] + m.cols[3][0],
+            m.cols[0][1] * p[0] + m.cols[1][1] * p[1] + m.cols[2][1] * p[2] + m.cols[3][1],
+            m.cols[0][2] * p[0] + m.cols[1][2] * p[1] + m.cols[2][2] * p[2] + m.cols[3][2],
         };
     }
 
-    pub fn transformVector(m: Float4x4, p: Float3) Float3 {
+    pub fn transformVector(m: Float4x4, p: Vec3f32) Vec3f32 {
         return .{
-            .x = m.cols[0][0] * p.x + m.cols[1][0] * p.y + m.cols[2][0] * p.z,
-            .y = m.cols[0][1] * p.x + m.cols[1][1] * p.y + m.cols[2][1] * p.z,
-            .z = m.cols[0][2] * p.x + m.cols[1][2] * p.y + m.cols[2][2] * p.z,
+            m.cols[0][0] * p[0] + m.cols[1][0] * p[1] + m.cols[2][0] * p[2],
+            m.cols[0][1] * p[0] + m.cols[1][1] * p[1] + m.cols[2][1] * p[2],
+            m.cols[0][2] * p[0] + m.cols[1][2] * p[1] + m.cols[2][2] * p[2],
         };
     }
 
-    pub fn translation(m: Float4x4) Float3 {
-        return .{ .x = m.cols[3][0], .y = m.cols[3][1], .z = m.cols[3][2] };
+    pub fn translation(m: Float4x4) Vec3f32 {
+        return .{ m.cols[3][0], m.cols[3][1], m.cols[3][2] };
     }
 };
 
-pub const Box = extern struct {
-    min: Float3,
-    max: Float3,
+pub const Box = struct {
+    min: Vec3f32,
+    max: Vec3f32,
 
     pub fn empty() Box {
         return .{
-            .min = .{ .x = std.math.inf(f32), .y = std.math.inf(f32), .z = std.math.inf(f32) },
-            .max = .{ .x = -std.math.inf(f32), .y = -std.math.inf(f32), .z = -std.math.inf(f32) },
+            .min = @splat(std.math.inf(f32)),
+            .max = @splat(-std.math.inf(f32)),
         };
     }
-    pub fn expand(self: *Box, p: Float3) void {
-        self.min.x = @min(self.min.x, p.x);
-        self.min.y = @min(self.min.y, p.y);
-        self.min.z = @min(self.min.z, p.z);
-        self.max.x = @max(self.max.x, p.x);
-        self.max.y = @max(self.max.y, p.y);
-        self.max.z = @max(self.max.z, p.z);
+    pub fn expand(self: *Box, p: Vec3f32) void {
+        self.min = @min(self.min, p);
+        self.max = @max(self.max, p);
     }
 
     pub fn isValid(self: Box) bool {
-        return self.min.x <= self.max.x and self.min.y <= self.max.y and self.min.z <= self.max.z;
+        return @reduce(.And, self.min <= self.max);
     }
 
-    pub fn contains(self: Box, point: Float3) bool {
+    pub fn contains(self: Box, point: Vec3f32) bool {
         return self.isValid() and
-            point.x >= self.min.x and point.x <= self.max.x and
-            point.y >= self.min.y and point.y <= self.max.y and
-            point.z >= self.min.z and point.z <= self.max.z;
+            @reduce(.And, point >= self.min) and
+            @reduce(.And, point <= self.max);
     }
 
     pub fn merge(a: Box, b: Box) Box {
         if (!a.isValid()) return b;
         if (!b.isValid()) return a;
         return .{
-            .min = .{
-                .x = @min(a.min.x, b.min.x),
-                .y = @min(a.min.y, b.min.y),
-                .z = @min(a.min.z, b.min.z),
-            },
-            .max = .{
-                .x = @max(a.max.x, b.max.x),
-                .y = @max(a.max.y, b.max.y),
-                .z = @max(a.max.z, b.max.z),
-            },
+            .min = @min(a.min, b.min),
+            .max = @max(a.max, b.max),
         };
     }
 
@@ -585,9 +443,9 @@ pub const Box = extern struct {
         var result = Box.empty();
         for (0..8) |corner| {
             result.expand(Float4x4.transformPoint(matrix, .{
-                .x = if (corner & 1 != 0) self.max.x else self.min.x,
-                .y = if (corner & 2 != 0) self.max.y else self.min.y,
-                .z = if (corner & 4 != 0) self.max.z else self.min.z,
+                if (corner & 1 != 0) self.max[0] else self.min[0],
+                if (corner & 2 != 0) self.max[1] else self.min[1],
+                if (corner & 4 != 0) self.max[2] else self.min[2],
             }));
         }
         return result;
@@ -623,17 +481,17 @@ pub const RectFloat = Rect(f32);
 
 test "transform composition and soa transpose" {
     const parent: Transform = .{
-        .translation = .{ .x = 1, .y = 2, .z = 3 },
-        .rotation = Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi / 2.0)),
+        .translation = .{ 1, 2, 3 },
+        .rotation = Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi / 2.0)),
     };
-    const child: Transform = .{ .translation = .{ .x = 1 } };
+    const child: Transform = .{ .translation = .{ 1, 0, 0 } };
     const combined = Transform.combine(parent, child);
-    try std.testing.expectApproxEqAbs(@as(f32, 1), combined.translation.x, 1e-5);
-    try std.testing.expectApproxEqAbs(@as(f32, 3), combined.translation.y, 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), combined.translation[0], 1e-5);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), combined.translation[1], 1e-5);
 
     var soa: [1]SoaTransform = undefined;
     aosToSoa(&.{ parent, child }, &soa);
-    try std.testing.expectEqual(parent.translation.x, lane(soa[0].translation.x, 0));
-    try std.testing.expectEqual(child.scale.z, lane(soa[0].scale.z, 1));
+    try std.testing.expectEqual(parent.translation[0], lane(soa[0].translation.x, 0));
+    try std.testing.expectEqual(child.scale[2], lane(soa[0].scale.z, 1));
     try std.testing.expectEqual(@as(f32, 1), lane(soa[0].scale.z, 3));
 }

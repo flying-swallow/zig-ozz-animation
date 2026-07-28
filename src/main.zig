@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: MIT
 const std = @import("std");
 const ozz = @import("zig_ozz_animation");
 
@@ -89,7 +89,7 @@ pub fn main(init: std.process.Init) !void {
             options.sampling_rate,
         ),
         .config_print => try stdout.writeAll(
-            \\{"archive":{"magic":"ZOZZBIN\\u0000","container_version":1,"endianness":"little"},"limits":{"joints":1024},"math":"caliper","gltf":"cglf","fbx":"disabled","rhi_samples":"disabled"}
+            \\{"archive":{"magic":"ZOZZBIN\\u0000","container_version":1,"endianness":"little"},"limits":{"joints":1024},"math":"caliper","gltf":"zgltf","fbx":"disabled","rhi_samples":"disabled"}
             \\
         ),
     }
@@ -128,7 +128,7 @@ fn importGltf(
         allocator,
         input_path,
         skeleton,
-        .{ .sampling_rate = sampling_rate },
+        .{ .sampling_rate = sampling_rate, .io = io },
     );
     if (animations_result) |animations| {
         defer ozz.gltf.deinitAnimations(allocator, animations);
@@ -257,46 +257,47 @@ fn migrateOne(
     bytes: []const u8,
     writer: *std.Io.Writer,
 ) !usize {
+    var reader = std.Io.Reader.fixed(bytes);
     switch (kind) {
         .skeleton => {
-            var value = try ozz.legacy.readSkeleton(allocator, bytes, .{});
+            var value = try ozz.legacy.readSkeleton(allocator, &reader, .{});
             defer value.deinit();
             try ozz.io.writeSkeleton(allocator, writer, value);
         },
         .float_track => return migrateTrack(f32, allocator, bytes, writer),
-        .float2_track => return migrateTrack(ozz.math.Float2, allocator, bytes, writer),
-        .float3_track => return migrateTrack(ozz.math.Float3, allocator, bytes, writer),
+        .float2_track => return migrateTrack(ozz.math.Vec2f32, allocator, bytes, writer),
+        .float3_track => return migrateTrack(ozz.math.Vec3f32, allocator, bytes, writer),
         .float4_track => return migrateTrack(ozz.math.Float4, allocator, bytes, writer),
         .quaternion_track => return migrateTrack(ozz.math.Quaternion, allocator, bytes, writer),
         .raw_skeleton => {
-            var value = try ozz.legacy.readRawSkeleton(allocator, bytes, .{});
+            var value = try ozz.legacy.readRawSkeleton(allocator, &reader, .{});
             defer value.deinit();
             try ozz.io.writeRawSkeleton(allocator, writer, value);
         },
         .raw_animation => {
-            var value = try ozz.legacy.readRawAnimation(allocator, bytes, .{});
+            var value = try ozz.legacy.readRawAnimation(allocator, &reader, .{});
             defer value.deinit();
             try ozz.io.writeRawAnimation(allocator, writer, value);
         },
         .raw_float_track => try migrateRawTrack(f32, allocator, bytes, writer),
-        .raw_float2_track => try migrateRawTrack(ozz.math.Float2, allocator, bytes, writer),
-        .raw_float3_track => try migrateRawTrack(ozz.math.Float3, allocator, bytes, writer),
+        .raw_float2_track => try migrateRawTrack(ozz.math.Vec2f32, allocator, bytes, writer),
+        .raw_float3_track => try migrateRawTrack(ozz.math.Vec3f32, allocator, bytes, writer),
         .raw_float4_track => try migrateRawTrack(ozz.math.Float4, allocator, bytes, writer),
         .raw_quaternion_track => try migrateRawTrack(ozz.math.Quaternion, allocator, bytes, writer),
         .animation => {
-            var value = try ozz.legacy.readAnimation(allocator, bytes, .{});
+            var value = try ozz.legacy.readAnimation(allocator, &reader, .{});
             defer value.deinit();
             try ozz.io.writeAnimation(allocator, writer, value);
         },
         .sample_mesh => {
             var consumed: usize = 0;
-            var value = try ozz.legacy.readMeshPrefix(allocator, bytes, .{}, &consumed);
+            var value = try ozz.legacy.readMeshPrefix(allocator, &reader, .{}, &consumed);
             defer value.deinit();
             try ozz.io.writeMesh(allocator, writer, value);
             return consumed;
         },
         .sample_mesh_part => {
-            const part = try ozz.legacy.readMeshPart(allocator, bytes, .{});
+            const part = try ozz.legacy.readMeshPart(allocator, &reader, .{});
             const parts = try allocator.alloc(ozz.geometry.MeshPart, 1);
             parts[0] = part;
             var value: ozz.geometry.Mesh = .{
@@ -320,7 +321,8 @@ fn migrateTrack(
     writer: *std.Io.Writer,
 ) !usize {
     var consumed: usize = 0;
-    var value = try ozz.legacy.readTrackPrefix(T, allocator, bytes, .{}, &consumed);
+    var reader = std.Io.Reader.fixed(bytes);
+    var value = try ozz.legacy.readTrackPrefix(T, allocator, &reader, .{}, &consumed);
     defer value.deinit();
     try ozz.io.writeTrack(T, allocator, writer, value);
     return consumed;
@@ -332,7 +334,8 @@ fn migrateRawTrack(
     bytes: []const u8,
     writer: *std.Io.Writer,
 ) !void {
-    var value = try ozz.legacy.readRawTrack(T, allocator, bytes, .{});
+    var reader = std.Io.Reader.fixed(bytes);
+    var value = try ozz.legacy.readRawTrack(T, allocator, &reader, .{});
     defer value.deinit();
     try ozz.io.writeRawTrack(T, allocator, writer, value);
 }

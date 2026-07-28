@@ -1,5 +1,26 @@
 const std = @import("std");
 const ozz = @import("zig_ozz_animation");
+const zbench = @import("zbench");
+
+const SamplingBenchmark = struct {
+    animation: *const ozz.animation.Animation,
+    context: *ozz.animation.SamplingContext,
+    output: []ozz.math.SoaTransform,
+    iteration: *usize,
+
+    pub fn run(self: *SamplingBenchmark, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        const iteration = self.iteration.*;
+        self.iteration.* +%= 1;
+        ozz.animation.sample(
+            self.animation,
+            @as(f32, @floatFromInt(iteration % 1000)) / 1000,
+            self.context,
+            self.output,
+        ) catch |err| std.debug.panic("sampling failed: {t}", .{err});
+        std.mem.doNotOptimizeAway(self.output[0]);
+    }
+};
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
@@ -10,18 +31,18 @@ pub fn main(init: std.process.Init) !void {
     const scale_keys = try allocator.alloc([2]ozz.animation.Float3Key, track_count);
     for (inputs, 0..) |*input, i| {
         translation_keys[i] = .{
-            .{ .ratio = 0, .value = .zero },
-            .{ .ratio = 0.5, .value = .{ .x = @floatFromInt(i % 11), .y = 1 } },
-            .{ .ratio = 1, .value = .zero },
+            .{ .ratio = 0, .value = @splat(0) },
+            .{ .ratio = 0.5, .value = .{ @floatFromInt(i % 11), 1, 0 } },
+            .{ .ratio = 1, .value = @splat(0) },
         };
         rotation_keys[i] = .{
             .{ .ratio = 0, .value = .identity },
-            .{ .ratio = 0.5, .value = ozz.math.Quaternion.fromAxisAngle(.y_axis, 1) },
+            .{ .ratio = 0.5, .value = ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 1) },
             .{ .ratio = 1, .value = .identity },
         };
         scale_keys[i] = .{
-            .{ .ratio = 0, .value = .one },
-            .{ .ratio = 1, .value = .one },
+            .{ .ratio = 0, .value = @splat(1) },
+            .{ .ratio = 1, .value = @splat(1) },
         };
         input.* = .{
             .translations = &translation_keys[i],
@@ -35,28 +56,24 @@ pub fn main(init: std.process.Init) !void {
     defer context.deinit();
     const output = try allocator.alloc(ozz.math.SoaTransform, animation.numSoaTracks());
 
-    const iterations = 20_000;
     for (0..100) |i| try ozz.animation.sample(
         &animation,
         @as(f32, @floatFromInt(i)) / 100,
         &context,
         output,
     );
-    const start = std.Io.Clock.real.now(init.io);
-    for (0..iterations) |i| try ozz.animation.sample(
-        &animation,
-        @as(f32, @floatFromInt(i % 1000)) / 1000,
-        &context,
-        output,
-    );
-    const elapsed = start.durationTo(std.Io.Clock.real.now(init.io));
-    const ns_per_sample = @as(f64, @floatFromInt(elapsed.nanoseconds)) / iterations;
-    var buffer: [256]u8 = undefined;
-    var stdout = std.Io.File.stdout().writer(init.io, &buffer);
-    try stdout.interface.print(
-        "sampling: {d:.1} ns/sample ({d} tracks, {d} iterations)\n",
-        .{ ns_per_sample, track_count, iterations },
-    );
-    try stdout.interface.flush();
-    std.mem.doNotOptimizeAway(output[0]);
+
+    var iteration: usize = 0;
+    const sampling = SamplingBenchmark{
+        .animation = &animation,
+        .context = &context,
+        .output = output,
+        .iteration = &iteration,
+    };
+    var benchmark = zbench.Benchmark.init(allocator, .{});
+    defer benchmark.deinit();
+    try benchmark.addParam("sample (256 tracks)", &sampling, .{
+        .items_per_run = track_count,
+    });
+    try benchmark.run(init.io, .stdout());
 }
