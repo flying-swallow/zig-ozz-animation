@@ -82,6 +82,8 @@ pub const SkinningOptions = struct {
 
 pub fn skin(options: SkinningOptions) !void {
     if (options.influences_count == 0) return SkinningError.InvalidInfluenceCount;
+    if (options.joint_matrices.len == 0 or options.output_positions.len == 0)
+        return SkinningError.BufferTooSmall;
     const vertex_count = options.input_positions.len;
     const influence_len = std.math.mul(usize, vertex_count, options.influences_count) catch
         return SkinningError.InvalidVertexCount;
@@ -208,15 +210,15 @@ fn writeStrided(comptime T: type, bytes: []u8, index: usize, stride: usize, valu
 /// float3 values; joint indices are u16 and weights are f32.
 pub fn skinStrided(options: StridedSkinningOptions) !void {
     if (options.influences_count == 0) return SkinningError.InvalidInfluenceCount;
-    const index_size = options.influences_count * @sizeOf(u16);
-    const weight_size = (options.influences_count - 1) * @sizeOf(f32);
-    if (options.joint_indices_stride < index_size or
-        (options.influences_count > 1 and options.joint_weights_stride < weight_size) or
-        options.input_positions_stride < @sizeOf(math.Float3) or
-        options.output_positions_stride < @sizeOf(math.Float3))
-    {
-        return SkinningError.InvalidStride;
-    }
+    if (options.joint_matrices.len == 0 or options.output_positions.len == 0)
+        return SkinningError.BufferTooSmall;
+    const index_size = std.math.mul(usize, options.influences_count, @sizeOf(u16)) catch
+        return SkinningError.InvalidInfluenceCount;
+    const weight_size = std.math.mul(usize, options.influences_count - 1, @sizeOf(f32)) catch
+        return SkinningError.InvalidInfluenceCount;
+    // Influence records may overlap or be reused. Ozz validates the byte span
+    // reached through each stride rather than requiring a full-record stride;
+    // requiredBytes likewise verifies that the final record is present.
     if (options.joint_indices.len < try requiredBytes(options.vertex_count, options.joint_indices_stride, index_size) or
         options.joint_weights.len < try requiredBytes(options.vertex_count, options.joint_weights_stride, weight_size) or
         options.input_positions.len < try requiredBytes(options.vertex_count, options.input_positions_stride, @sizeOf(math.Float3)) or

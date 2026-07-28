@@ -60,7 +60,7 @@ pub const RawAnimation = struct {
 fn validateTime(comptime Key: type, keys: []const Key, duration: f32) bool {
     var previous: f32 = -1;
     for (keys) |key| {
-        if (!std.math.isFinite(key.time) or key.time < previous or key.time < 0 or key.time > duration) {
+        if (!std.math.isFinite(key.time) or key.time <= previous or key.time < 0 or key.time > duration) {
             return false;
         }
         previous = key.time;
@@ -78,12 +78,58 @@ pub const RawSkeleton = struct {
     allocator: std.mem.Allocator,
     roots: []RawJoint,
 
+    pub fn numJoints(self: RawSkeleton) usize {
+        var count: usize = 0;
+        for (self.roots) |root| countJoint(root, &count);
+        return count;
+    }
+
+    pub fn validate(self: RawSkeleton) bool {
+        return self.numJoints() <= runtime.max_joints;
+    }
+
     pub fn deinit(self: *RawSkeleton) void {
         for (self.roots) |*root| deinitJoint(self.allocator, root);
         self.allocator.free(self.roots);
         self.* = undefined;
     }
 };
+
+fn countJoint(joint: RawJoint, count: *usize) void {
+    count.* += 1;
+    for (joint.children) |child| countJoint(child, count);
+}
+
+/// Visits parents before their children, preserving root and sibling order.
+/// `visitor` must expose `visit(*const RawJoint, ?*const RawJoint)`.
+pub fn iterateJointsDF(raw: RawSkeleton, visitor: anytype) void {
+    for (raw.roots) |*root| iterateJointDF(root, null, visitor);
+}
+
+fn iterateJointDF(joint: *const RawJoint, parent: ?*const RawJoint, visitor: anytype) void {
+    visitor.visit(joint, parent);
+    for (joint.children) |*child| iterateJointDF(child, joint, visitor);
+}
+
+/// Visits the hierarchy breadth-first, preserving root and sibling order.
+/// `visitor` must expose `visit(*const RawJoint, ?*const RawJoint)`.
+pub fn iterateJointsBF(allocator: std.mem.Allocator, raw: RawSkeleton, visitor: anytype) !void {
+    const Entry = struct {
+        joint: *const RawJoint,
+        parent: ?*const RawJoint,
+    };
+    var queue: std.ArrayList(Entry) = .empty;
+    defer queue.deinit(allocator);
+    for (raw.roots) |*root| try queue.append(allocator, .{ .joint = root, .parent = null });
+    var cursor: usize = 0;
+    while (cursor < queue.items.len) : (cursor += 1) {
+        const entry = queue.items[cursor];
+        visitor.visit(entry.joint, entry.parent);
+        for (entry.joint.children) |*child| {
+            try queue.append(allocator, .{ .joint = child, .parent = entry.joint });
+        }
+    }
+}
 
 fn deinitJoint(allocator: std.mem.Allocator, joint: *RawJoint) void {
     for (joint.children) |*child| deinitJoint(allocator, child);
@@ -93,6 +139,7 @@ fn deinitJoint(allocator: std.mem.Allocator, joint: *RawJoint) void {
 
 pub const SkeletonBuilder = struct {
     pub fn build(allocator: std.mem.Allocator, raw: RawSkeleton) !runtime.Skeleton {
+        if (!raw.validate()) return runtime.Error.TooManyJoints;
         var inputs: std.ArrayList(runtime.JointInput) = .empty;
         defer inputs.deinit(allocator);
         for (raw.roots) |root| try flattenJoint(allocator, &inputs, root, runtime.no_parent);
@@ -145,10 +192,25 @@ pub const AnimationBuilder = struct {
                 .value = key.value,
             });
             const r_start = rotations.items.len;
-            for (track.rotations) |key| try rotations.append(allocator, .{
-                .ratio = key.time / raw.duration,
-                .value = key.value,
-            });
+            var previous_rotation = math.Quaternion.identity;
+            for (track.rotations, 0..) |key, key_index| {
+                var rotation = math.Quaternion.normalize(key.value);
+                if ((key_index == 0 and rotation.w < 0) or
+                    (key_index != 0 and math.Quaternion.dot(previous_rotation, rotation) < 0))
+                {
+                    rotation = .{
+                        .x = -rotation.x,
+                        .y = -rotation.y,
+                        .z = -rotation.z,
+                        .w = -rotation.w,
+                    };
+                }
+                try rotations.append(allocator, .{
+                    .ratio = key.time / raw.duration,
+                    .value = rotation,
+                });
+                previous_rotation = rotation;
+            }
             const s_start = scales.items.len;
             for (track.scales) |key| try scales.append(allocator, .{
                 .ratio = key.time / raw.duration,
@@ -164,12 +226,32 @@ pub const AnimationBuilder = struct {
     }
 };
 
-pub fn sampleJointTrack(track: RawJointTrack, time: f32) math.Transform {
+/// Samples a standalone raw joint track.
+///
+/// Unlike `RawAnimation`, a `RawJointTrack` has no constructor that can reject
+/// malformed key arrays. Validate them at this API boundary, matching the
+/// upstream `SampleTrack` failure contract.
+pub fn sampleJointTrack(track: RawJointTrack, time: f32) !math.Transform {
+    if (!validateSampleKeys(TranslationKey, track.translations) or
+        !validateSampleKeys(RotationKey, track.rotations) or
+        !validateSampleKeys(ScaleKey, track.scales))
+    {
+        return runtime.Error.InvalidKeyframe;
+    }
     return .{
         .translation = sampleTimed(math.Float3, TranslationKey, track.translations, time, .zero),
         .rotation = sampleTimed(math.Quaternion, RotationKey, track.rotations, time, .identity),
         .scale = sampleTimed(math.Float3, ScaleKey, track.scales, time, .one),
     };
+}
+
+fn validateSampleKeys(comptime Key: type, keys: []const Key) bool {
+    var previous: f32 = -1;
+    for (keys) |key| {
+        if (!std.math.isFinite(key.time) or key.time < 0 or key.time <= previous) return false;
+        previous = key.time;
+    }
+    return true;
 }
 
 fn sampleTimed(
@@ -193,7 +275,7 @@ pub fn sampleRawAnimation(raw: RawAnimation, time: f32, output: []math.Transform
     if (!raw.validate()) return runtime.Error.InvalidKeyframe;
     if (output.len < raw.tracks.len) return runtime.Error.OutputTooSmall;
     const clamped = std.math.clamp(time, 0, raw.duration);
-    for (raw.tracks, 0..) |track, i| output[i] = sampleJointTrack(track, clamped);
+    for (raw.tracks, 0..) |track, i| output[i] = try sampleJointTrack(track, clamped);
 }
 
 pub fn extractTimePoints(allocator: std.mem.Allocator, raw: RawAnimation) ![]f32 {
@@ -318,14 +400,69 @@ pub fn buildTrack(
     raw: RawTrack(T),
 ) !runtime.Track(T) {
     const RuntimeKey = runtime.Track(T).Key;
-    const keys = try allocator.alloc(RuntimeKey, raw.keys.len);
+    const key_count: usize = if (raw.keys.len == 0)
+        0
+    else if (raw.keys.len == 1)
+        2
+    else
+        raw.keys.len +
+            @as(usize, @intFromBool(raw.keys[0].ratio != 0)) +
+            @as(usize, @intFromBool(raw.keys[raw.keys.len - 1].ratio != 1));
+    const keys = try allocator.alloc(RuntimeKey, key_count);
     defer allocator.free(keys);
-    for (raw.keys, 0..) |key, i| {
-        keys[i] = .{
+    var output_index: usize = 0;
+    if (raw.keys.len == 1) {
+        keys[0] = .{
+            .ratio = 0,
+            .value = raw.keys[0].value,
+            .interpolation = .linear,
+        };
+        keys[1] = .{
+            .ratio = 1,
+            .value = raw.keys[0].value,
+            .interpolation = .linear,
+        };
+        output_index = 2;
+    } else if (raw.keys.len != 0 and raw.keys[0].ratio != 0) {
+        keys[output_index] = .{
+            .ratio = 0,
+            .value = raw.keys[0].value,
+            .interpolation = .linear,
+        };
+        output_index += 1;
+    }
+    for (if (raw.keys.len == 1) raw.keys[0..0] else raw.keys) |key| {
+        keys[output_index] = .{
             .ratio = key.ratio,
             .value = key.value,
             .interpolation = key.interpolation,
         };
+        output_index += 1;
+    }
+    if (raw.keys.len > 1 and raw.keys[raw.keys.len - 1].ratio != 1) {
+        keys[output_index] = .{
+            .ratio = 1,
+            .value = raw.keys[raw.keys.len - 1].value,
+            .interpolation = .linear,
+        };
+    }
+    if (T == math.Quaternion) {
+        var previous = math.Quaternion.identity;
+        for (keys, 0..) |*key, i| {
+            var normalized = math.Quaternion.normalize(key.value);
+            if ((i == 0 and normalized.w < 0) or
+                (i != 0 and math.Quaternion.dot(previous, normalized) < 0))
+            {
+                normalized = .{
+                    .x = -normalized.x,
+                    .y = -normalized.y,
+                    .z = -normalized.z,
+                    .w = -normalized.w,
+                };
+            }
+            key.value = normalized;
+            previous = normalized;
+        }
     }
     return runtime.Track(T).initMixed(allocator, raw.name, keys);
 }
@@ -367,34 +504,71 @@ pub fn optimizeTrack(
     raw: RawTrack(T),
     tolerance: f32,
 ) !RawTrack(T) {
-    if (raw.keys.len <= 2) return RawTrack(T).init(allocator, raw.name, raw.keys);
-    var output: std.ArrayList(RawTrack(T).Key) = .empty;
-    defer output.deinit(allocator);
-    try output.append(allocator, raw.keys[0]);
-    var anchor: usize = 0;
-    while (anchor + 1 < raw.keys.len) {
-        var candidate = anchor + 2;
-        var best = anchor + 1;
-        while (candidate < raw.keys.len) : (candidate += 1) {
-            const left = raw.keys[anchor];
-            const right = raw.keys[candidate];
-            var valid = left.interpolation == .linear;
-            if (valid) for (raw.keys[anchor + 1 .. candidate]) |middle| {
-                if (middle.interpolation != .linear) {
-                    valid = false;
-                    break;
-                }
-                const alpha = (middle.ratio - left.ratio) / (right.ratio - left.ratio);
-                if (valueDistance(T, middle.value, lerpValue(T, left.value, right.value, alpha)) > tolerance) {
-                    valid = false;
-                    break;
-                }
-            };
-            if (!valid) break;
-            best = candidate;
+    const Key = RawTrack(T).Key;
+    if (raw.keys.len == 0) return RawTrack(T).init(allocator, raw.name, raw.keys);
+    if (raw.keys.len == 1) {
+        const keys = if (valueDistance(T, defaultTrackValue(T), raw.keys[0].value) <= tolerance)
+            raw.keys[0..0]
+        else
+            raw.keys;
+        return RawTrack(T).init(allocator, raw.name, keys);
+    }
+
+    const Segment = struct { first: usize, last: usize };
+    var segments: std.ArrayList(Segment) = .empty;
+    defer segments.deinit(allocator);
+    var included = try allocator.alloc(bool, raw.keys.len);
+    defer allocator.free(included);
+    @memset(included, false);
+
+    try segments.append(allocator, .{ .first = 0, .last = raw.keys.len - 1 });
+    included[0] = true;
+    included[raw.keys.len - 1] = true;
+    while (segments.pop()) |segment| {
+        const left = raw.keys[segment.first];
+        const right = raw.keys[segment.last];
+        var maximum: f32 = -1;
+        var candidate = segment.first;
+        for (segment.first + 1..segment.last) |i| {
+            const key = raw.keys[i];
+            if (key.interpolation == .step) {
+                candidate = i;
+                break;
+            }
+            const alpha = (key.ratio - left.ratio) / (right.ratio - left.ratio);
+            const distance = valueDistance(T, lerpValue(T, left.value, right.value, alpha), key.value);
+            if (distance > tolerance and distance > maximum) {
+                maximum = distance;
+                candidate = i;
+            }
         }
-        try output.append(allocator, raw.keys[best]);
-        anchor = best;
+        if (candidate != segment.first) {
+            included[candidate] = true;
+            if (candidate - segment.first > 1) {
+                try segments.append(allocator, .{ .first = segment.first, .last = candidate });
+            }
+            if (segment.last - candidate > 1) {
+                try segments.append(allocator, .{ .first = candidate, .last = segment.last });
+            }
+        }
+    }
+
+    var output: std.ArrayList(Key) = .empty;
+    defer output.deinit(allocator);
+    for (raw.keys, included) |key, keep| if (keep) try output.append(allocator, key);
+
+    // RDP always retains both endpoints. Upstream then removes redundant tail
+    // keys so an identity track has no keys and a constant track has one.
+    while (output.items.len != 0) {
+        const last_key = output.items.len == 1;
+        const back = output.items[output.items.len - 1];
+        if (!last_key and back.interpolation == .step) break;
+        const previous = if (last_key)
+            defaultTrackValue(T)
+        else
+            output.items[output.items.len - 2].value;
+        if (valueDistance(T, previous, back.value) > tolerance) break;
+        _ = output.pop();
     }
     return RawTrack(T).init(allocator, raw.name, output.items);
 }
@@ -545,6 +719,47 @@ pub fn extractMotion(
     errdefer position.deinit();
     var rotation = try RawQuaternionTrack.init(allocator, "motion_rotation", rotation_keys.items);
     errdefer rotation.deinit();
+
+    if (options.position.loop and position.keys.len > 1) {
+        const delta = math.Float3.sub(position.keys[0].value, position.keys[position.keys.len - 1].value);
+        const denominator: f32 = @floatFromInt(position.keys.len - 1);
+        for (position.keys, 0..) |*key, i| {
+            key.value = math.Float3.add(
+                key.value,
+                math.Float3.scale(delta, @as(f32, @floatFromInt(i)) / denominator),
+            );
+        }
+    }
+    if (options.rotation.loop and rotation.keys.len > 1) {
+        const delta = math.Quaternion.mul(
+            rotation.keys[0].value,
+            math.Quaternion.conjugate(rotation.keys[rotation.keys.len - 1].value),
+        );
+        const denominator: f32 = @floatFromInt(rotation.keys.len - 1);
+        for (rotation.keys, 0..) |*key, i| {
+            const correction = math.Quaternion.nlerp(
+                .identity,
+                delta,
+                @as(f32, @floatFromInt(i)) / denominator,
+            );
+            key.value = math.Quaternion.normalize(math.Quaternion.mul(correction, key.value));
+        }
+    }
+
+    // Root motion is composed as rotation followed by translation. Once the
+    // extracted rotation is applied outside the animation, the remaining
+    // translation must be expressed in that rotating frame as well. Rotation
+    // and translation keys can have different times, so sample the extracted
+    // rotation track at each translation key, matching Ozz's extractor.
+    if (options.rotation.bake) {
+        for (baked.tracks[options.root_joint].translations, position.keys) |*joint_key, motion_key| {
+            const motion_rotation = sampleTrack(math.Quaternion, rotation, motion_key.ratio);
+            joint_key.value = math.Quaternion.rotate(
+                math.Quaternion.conjugate(motion_rotation),
+                joint_key.value,
+            );
+        }
+    }
     return .{ .position = position, .rotation = rotation, .baked = baked };
 }
 

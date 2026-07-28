@@ -9,14 +9,15 @@ No C++ runtime is required.
 The repository currently provides:
 
 - owned runtime skeletons, animations, scalar/vector/quaternion tracks, cached
-  sampling, blending, local-to-model, motion blending, aim IK, two-bone IK,
-  triggering, and CPU skinning;
+  sampling, hierarchy traversal, blending, local-to-model, motion blending,
+  aim IK, two-bone IK, triggering, and CPU skinning;
 - raw skeletons/animations/tracks, builders, additive animation generation,
   hierarchy-aware optimization with per-joint overrides, sampling, and
   time-point extraction;
 - bounded, versioned, little-endian `.zozz` serialization;
 - a pure-Zig converter for every tagged Ozz 0.16 archive type, in big- or
-  little-endian form, including concatenated motion tracks and mesh streams;
+  little-endian form, including concatenated motion tracks and mesh streams,
+  plus C++-compatible runtime skeleton output;
 - glTF/GLB hierarchy, skin, and animation import through the Zig `cglf`
   package, including external buffer URIs;
 - native and WebAssembly-compatible core modules (graphical samples are a

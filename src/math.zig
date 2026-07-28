@@ -19,8 +19,42 @@ pub const Float2 = extern struct {
     pub fn mul(a: Float2, b: Float2) Float2 {
         return .{ .x = a.x * b.x, .y = a.y * b.y };
     }
+    pub fn div(a: Float2, b: Float2) Float2 {
+        return .{ .x = a.x / b.x, .y = a.y / b.y };
+    }
+    pub fn negate(v: Float2) Float2 {
+        return .{ .x = -v.x, .y = -v.y };
+    }
     pub fn scale(v: Float2, s: f32) Float2 {
         return .{ .x = v.x * s, .y = v.y * s };
+    }
+    pub fn lengthSquared(v: Float2) f32 {
+        return dot(v, v);
+    }
+    pub fn length(v: Float2) f32 {
+        return @sqrt(lengthSquared(v));
+    }
+    pub fn normalize(v: Float2) Float2 {
+        const len = length(v);
+        return if (len > epsilon) scale(v, 1 / len) else zero;
+    }
+    pub fn normalizeSafe(v: Float2, fallback: Float2) Float2 {
+        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
+    }
+    pub fn isNormalized(v: Float2) bool {
+        return @abs(lengthSquared(v) - 1) <= epsilon;
+    }
+    pub fn min(a: Float2, b: Float2) Float2 {
+        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y) };
+    }
+    pub fn max(a: Float2, b: Float2) Float2 {
+        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y) };
+    }
+    pub fn clamp(v: Float2, lower: Float2, upper: Float2) Float2 {
+        return min(max(v, lower), upper);
+    }
+    pub fn approxEq(a: Float2, b: Float2, tolerance: f32) bool {
+        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance;
     }
     pub fn dot(a: Float2, b: Float2) f32 {
         return a.x * b.x + a.y * b.y;
@@ -50,6 +84,12 @@ pub const Float3 = extern struct {
     pub fn mul(a: Float3, b: Float3) Float3 {
         return .{ .x = a.x * b.x, .y = a.y * b.y, .z = a.z * b.z };
     }
+    pub fn div(a: Float3, b: Float3) Float3 {
+        return .{ .x = a.x / b.x, .y = a.y / b.y, .z = a.z / b.z };
+    }
+    pub fn negate(v: Float3) Float3 {
+        return .{ .x = -v.x, .y = -v.y, .z = -v.z };
+    }
     pub fn scale(v: Float3, s: f32) Float3 {
         return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s };
     }
@@ -68,6 +108,25 @@ pub const Float3 = extern struct {
     pub fn normalize(v: Float3) Float3 {
         const len = length(v);
         return if (len > epsilon) fromVec(caliper.vec.normalize(asVec(v))) else zero;
+    }
+    pub fn normalizeSafe(v: Float3, fallback: Float3) Float3 {
+        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
+    }
+    pub fn isNormalized(v: Float3) bool {
+        return @abs(lengthSquared(v) - 1) <= epsilon;
+    }
+    pub fn min(a: Float3, b: Float3) Float3 {
+        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y), .z = @min(a.z, b.z) };
+    }
+    pub fn max(a: Float3, b: Float3) Float3 {
+        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y), .z = @max(a.z, b.z) };
+    }
+    pub fn clamp(v: Float3, lower: Float3, upper: Float3) Float3 {
+        return min(max(v, lower), upper);
+    }
+    pub fn approxEq(a: Float3, b: Float3, tolerance: f32) bool {
+        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance and
+            @abs(a.z - b.z) <= tolerance;
     }
     pub fn lerp(a: Float3, b: Float3, t: f32) Float3 {
         return add(a, scale(sub(b, a), t));
@@ -100,11 +159,46 @@ pub const Float4 = extern struct {
     pub fn mul(a: Float4, b: Float4) Float4 {
         return .{ .x = a.x * b.x, .y = a.y * b.y, .z = a.z * b.z, .w = a.w * b.w };
     }
+    pub fn div(a: Float4, b: Float4) Float4 {
+        return .{ .x = a.x / b.x, .y = a.y / b.y, .z = a.z / b.z, .w = a.w / b.w };
+    }
+    pub fn negate(v: Float4) Float4 {
+        return .{ .x = -v.x, .y = -v.y, .z = -v.z, .w = -v.w };
+    }
     pub fn scale(v: Float4, s: f32) Float4 {
         return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s };
     }
     pub fn dot(a: Float4, b: Float4) f32 {
         return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    }
+    pub fn lengthSquared(v: Float4) f32 {
+        return dot(v, v);
+    }
+    pub fn length(v: Float4) f32 {
+        return @sqrt(lengthSquared(v));
+    }
+    pub fn normalize(v: Float4) Float4 {
+        const len = length(v);
+        return if (len > epsilon) scale(v, 1 / len) else zero;
+    }
+    pub fn normalizeSafe(v: Float4, fallback: Float4) Float4 {
+        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
+    }
+    pub fn isNormalized(v: Float4) bool {
+        return @abs(lengthSquared(v) - 1) <= epsilon;
+    }
+    pub fn min(a: Float4, b: Float4) Float4 {
+        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y), .z = @min(a.z, b.z), .w = @min(a.w, b.w) };
+    }
+    pub fn max(a: Float4, b: Float4) Float4 {
+        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y), .z = @max(a.z, b.z), .w = @max(a.w, b.w) };
+    }
+    pub fn clamp(v: Float4, lower: Float4, upper: Float4) Float4 {
+        return min(max(v, lower), upper);
+    }
+    pub fn approxEq(a: Float4, b: Float4, tolerance: f32) bool {
+        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance and
+            @abs(a.z - b.z) <= tolerance and @abs(a.w - b.w) <= tolerance;
     }
     pub fn lerp(a: Float4, b: Float4, t: f32) Float4 {
         return .{
@@ -130,6 +224,22 @@ pub const Quaternion = extern struct {
     pub fn conjugate(q: Quaternion) Quaternion {
         return .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
     }
+    pub fn negate(q: Quaternion) Quaternion {
+        return .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w };
+    }
+    pub fn add(a: Quaternion, b: Quaternion) Quaternion {
+        return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w };
+    }
+    pub fn scale(q: Quaternion, s: f32) Quaternion {
+        return .{ .x = q.x * s, .y = q.y * s, .z = q.z * s, .w = q.w * s };
+    }
+    pub fn isNormalized(q: Quaternion) bool {
+        return @abs(dot(q, q) - 1) <= epsilon;
+    }
+    /// Compares rotations, treating q and -q as the same orientation.
+    pub fn approxRotationEq(a: Quaternion, b: Quaternion, cosine_tolerance: f32) bool {
+        return @abs(dot(a, b)) >= cosine_tolerance;
+    }
     pub fn normalize(q: Quaternion) Quaternion {
         const len_sq = dot(q, q);
         if (len_sq <= epsilon) return identity;
@@ -152,9 +262,29 @@ pub const Quaternion = extern struct {
             .w = a.w + (b.w - a.w) * t,
         });
     }
+    pub fn lerp(a: Quaternion, b: Quaternion, t: f32) Quaternion {
+        return .{
+            .x = a.x + (b.x - a.x) * t,
+            .y = a.y + (b.y - a.y) * t,
+            .z = a.z + (b.z - a.z) * t,
+            .w = a.w + (b.w - a.w) * t,
+        };
+    }
+    pub fn slerp(a: Quaternion, b: Quaternion, t: f32) Quaternion {
+        var cos_angle = std.math.clamp(dot(a, b), -1, 1);
+        if (@abs(cos_angle) > 0.9995) return normalize(lerp(a, b, t));
+        const angle = std.math.acos(cos_angle);
+        const sin_angle = @sin(angle);
+        cos_angle = @sin((1 - t) * angle) / sin_angle;
+        const b_weight = @sin(t * angle) / sin_angle;
+        return add(scale(a, cos_angle), scale(b, b_weight));
+    }
     pub fn fromAxisAngle(axis_in: Float3, angle: f32) Quaternion {
         const axis = Float3.normalize(axis_in);
         return fromVec(caliper.quat.from_rotation(Float3.asVec(axis), angle));
+    }
+    pub fn fromAxisCosAngle(axis: Float3, cosine: f32) Quaternion {
+        return fromAxisAngle(axis, std.math.acos(std.math.clamp(cosine, -1, 1)));
     }
 
     /// Builds a quaternion from intrinsic XYZ Euler rotations.

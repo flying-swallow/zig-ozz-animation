@@ -11,6 +11,62 @@ const usage =
     \\
 ;
 
+const Command = union(enum) {
+    help,
+    inspect: []const u8,
+    migrate: struct {
+        input: []const u8,
+        output: []const u8,
+    },
+    import: struct {
+        input: []const u8,
+        output: []const u8,
+        sampling_rate: f32,
+    },
+    config_print,
+};
+
+fn parseCommand(args: []const []const u8) error{InvalidArguments}!Command {
+    if (args.len < 2 or std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h")) {
+        if (args.len > 2) return error.InvalidArguments;
+        return .help;
+    }
+    if (std.mem.eql(u8, args[1], "inspect")) {
+        if (args.len != 3) return error.InvalidArguments;
+        return .{ .inspect = args[2] };
+    }
+    if (std.mem.eql(u8, args[1], "migrate")) {
+        if (args.len != 4) return error.InvalidArguments;
+        return .{ .migrate = .{ .input = args[2], .output = args[3] } };
+    }
+    if (std.mem.eql(u8, args[1], "config")) {
+        if (args.len != 3 or !std.mem.eql(u8, args[2], "print")) {
+            return error.InvalidArguments;
+        }
+        return .config_print;
+    }
+    if (std.mem.eql(u8, args[1], "import")) {
+        if ((args.len != 5 and args.len != 7) or !std.mem.eql(u8, args[3], "--output") or
+            (args.len == 7 and !std.mem.eql(u8, args[5], "--sampling-rate")))
+        {
+            return error.InvalidArguments;
+        }
+        const sampling_rate = if (args.len == 7)
+            std.fmt.parseFloat(f32, args[6]) catch return error.InvalidArguments
+        else
+            0;
+        if (!std.math.isFinite(sampling_rate) or sampling_rate < 0) {
+            return error.InvalidArguments;
+        }
+        return .{ .import = .{
+            .input = args[2],
+            .output = args[4],
+            .sampling_rate = sampling_rate,
+        } };
+    }
+    return error.InvalidArguments;
+}
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(allocator);
@@ -19,47 +75,24 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_file.interface;
     defer stdout.flush() catch {};
 
-    if (args.len < 2 or std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h")) {
-        try stdout.writeAll(usage);
-        return;
-    }
-    if (std.mem.eql(u8, args[1], "inspect")) {
-        if (args.len != 3) return fail("inspect expects one archive path", .{});
-        return inspect(init.io, allocator, stdout, args[2]);
-    }
-    if (std.mem.eql(u8, args[1], "migrate")) {
-        if (args.len != 4) return fail("migrate expects input and output paths", .{});
-        return migrate(init.io, allocator, stdout, args[2], args[3]);
-    }
-    if (std.mem.eql(u8, args[1], "config")) {
-        if (args.len != 3 or !std.mem.eql(u8, args[2], "print")) {
-            return fail("config expects the 'print' subcommand", .{});
-        }
-        try stdout.writeAll(
+    const command = parseCommand(args) catch return fail("invalid arguments\n\n{s}", .{usage});
+    switch (command) {
+        .help => try stdout.writeAll(usage),
+        .inspect => |path| return inspect(init.io, allocator, stdout, path),
+        .migrate => |paths| return migrate(init.io, allocator, stdout, paths.input, paths.output),
+        .import => |options| return importGltf(
+            init.io,
+            allocator,
+            stdout,
+            options.input,
+            options.output,
+            options.sampling_rate,
+        ),
+        .config_print => try stdout.writeAll(
             \\{"archive":{"magic":"ZOZZBIN\\u0000","container_version":1,"endianness":"little"},"limits":{"joints":1024},"math":"caliper","gltf":"cglf","fbx":"disabled","rhi_samples":"disabled"}
             \\
-        );
-        return;
+        ),
     }
-    if (std.mem.eql(u8, args[1], "import")) {
-        if ((args.len != 5 and args.len != 7) or !std.mem.eql(u8, args[3], "--output") or
-            (args.len == 7 and !std.mem.eql(u8, args[5], "--sampling-rate")))
-        {
-            return fail(
-                "import expects <source.gltf|source.glb> --output <directory> [--sampling-rate <hz>]",
-                .{},
-            );
-        }
-        const sampling_rate = if (args.len == 7)
-            std.fmt.parseFloat(f32, args[6]) catch return fail("invalid sampling rate '{s}'", .{args[6]})
-        else
-            0;
-        if (!std.math.isFinite(sampling_rate) or sampling_rate < 0) {
-            return fail("sampling rate must be finite and non-negative", .{});
-        }
-        return importGltf(init.io, allocator, stdout, args[2], args[4], sampling_rate);
-    }
-    return fail("unknown command '{s}'\n\n{s}", .{ args[1], usage });
 }
 
 fn importGltf(
@@ -308,4 +341,56 @@ test "usage has the unified commands" {
     try std.testing.expect(std.mem.indexOf(u8, usage, "inspect") != null);
     try std.testing.expect(std.mem.indexOf(u8, usage, "migrate") != null);
     try std.testing.expect(std.mem.indexOf(u8, usage, "import") != null);
+}
+
+test "command parser recognizes help and all commands" {
+    try std.testing.expect((try parseCommand(&.{"ozz"})) == .help);
+    try std.testing.expect((try parseCommand(&.{ "ozz", "--help" })) == .help);
+    try std.testing.expect((try parseCommand(&.{ "ozz", "-h" })) == .help);
+
+    const inspect_command = try parseCommand(&.{ "ozz", "inspect", "input.zozz" });
+    try std.testing.expectEqualStrings("input.zozz", inspect_command.inspect);
+
+    const migrate_command = try parseCommand(&.{ "ozz", "migrate", "old.ozz", "new.zozz" });
+    try std.testing.expectEqualStrings("old.ozz", migrate_command.migrate.input);
+    try std.testing.expectEqualStrings("new.zozz", migrate_command.migrate.output);
+
+    try std.testing.expect((try parseCommand(&.{ "ozz", "config", "print" })) == .config_print);
+}
+
+test "command parser validates required and duplicate arguments" {
+    const invalid = [_][]const []const u8{
+        &.{ "ozz", "--help", "extra" },
+        &.{ "ozz", "inspect" },
+        &.{ "ozz", "inspect", "one", "two" },
+        &.{ "ozz", "migrate", "input" },
+        &.{ "ozz", "migrate", "input", "output", "extra" },
+        &.{ "ozz", "config" },
+        &.{ "ozz", "config", "show" },
+        &.{ "ozz", "unknown" },
+        &.{ "ozz", "import", "input.gltf", "--output", "out", "--output", "other" },
+        &.{ "ozz", "import", "input.gltf", "--sampling-rate", "30", "--output", "out" },
+    };
+    for (invalid) |args| {
+        try std.testing.expectError(error.InvalidArguments, parseCommand(args));
+    }
+}
+
+test "command parser validates import options and sampling rate" {
+    const basic = try parseCommand(&.{ "ozz", "import", "input.gltf", "--output", "out" });
+    try std.testing.expectEqualStrings("input.gltf", basic.import.input);
+    try std.testing.expectEqualStrings("out", basic.import.output);
+    try std.testing.expectEqual(@as(f32, 0), basic.import.sampling_rate);
+
+    const sampled = try parseCommand(&.{
+        "ozz", "import", "input.glb", "--output", "out", "--sampling-rate", "60.5",
+    });
+    try std.testing.expectEqual(@as(f32, 60.5), sampled.import.sampling_rate);
+
+    const invalid_rates = [_][]const u8{ "abc", "-1", "nan", "inf", "-inf" };
+    for (invalid_rates) |rate| {
+        try std.testing.expectError(error.InvalidArguments, parseCommand(&.{
+            "ozz", "import", "input.gltf", "--output", "out", "--sampling-rate", rate,
+        }));
+    }
 }

@@ -28,6 +28,10 @@ pub const Limits = struct {
     max_depth: u16 = 1024,
 };
 
+pub const WriteOptions = struct {
+    endian: std.builtin.Endian = .little,
+};
+
 pub const Kind = enum {
     skeleton,
     animation,
@@ -155,6 +159,62 @@ const Reader = struct {
         if (self.pos != self.bytes.len) return Error.TrailingData;
     }
 };
+
+fn writeInt(writer: *std.Io.Writer, comptime T: type, value: T, endian: std.builtin.Endian) !void {
+    switch (endian) {
+        .little => try writer.writeInt(T, value, .little),
+        .big => try writer.writeInt(T, value, .big),
+    }
+}
+
+fn writeFloat(writer: *std.Io.Writer, value: f32, endian: std.builtin.Endian) !void {
+    try writeInt(writer, u32, @bitCast(value), endian);
+}
+
+/// Writes an Ozz 0.16 `Skeleton` archive (schema version 2) that can be read
+/// by the upstream C++ runtime. Unlike the native `.zozz` codec, this format
+/// intentionally follows Ozz's tagged, endian-selectable object layout.
+pub fn writeSkeleton(
+    writer: *std.Io.Writer,
+    skeleton: animation.Skeleton,
+    options: WriteOptions,
+) !void {
+    try writer.writeByte(if (options.endian == .little) 1 else 0);
+    try writer.writeAll("ozz-skeleton\x00");
+    try writeInt(writer, u32, 2, options.endian);
+    try writeInt(writer, i32, @intCast(skeleton.numJoints()), options.endian);
+    if (skeleton.numJoints() == 0) return;
+
+    var chars_count: usize = 0;
+    for (skeleton.names) |name| {
+        chars_count = try std.math.add(usize, chars_count, name.len + 1);
+    }
+    try writeInt(writer, i32, @intCast(chars_count), options.endian);
+    for (skeleton.names) |name| {
+        try writer.writeAll(name);
+        try writer.writeByte(0);
+    }
+    for (skeleton.parents) |parent| try writeInt(writer, i16, parent, options.endian);
+
+    // Runtime rest poses are stored in the same SoA field/lane order as Ozz:
+    // translation xyz, rotation xyzw, then scale xyz.
+    for (skeleton.rest_poses) |pose| {
+        inline for (.{
+            pose.translation.x,
+            pose.translation.y,
+            pose.translation.z,
+            pose.rotation.x,
+            pose.rotation.y,
+            pose.rotation.z,
+            pose.rotation.w,
+            pose.scale.x,
+            pose.scale.y,
+            pose.scale.z,
+        }) |field| {
+            for (0..4) |lane| try writeFloat(writer, math.lane(field, lane), options.endian);
+        }
+    }
+}
 
 fn readFloat2(reader: *Reader) !math.Float2 {
     return .{ .x = try reader.float(), .y = try reader.float() };

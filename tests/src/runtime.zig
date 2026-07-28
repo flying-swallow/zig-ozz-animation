@@ -13,6 +13,14 @@ fn makeSkeleton(allocator: std.mem.Allocator) !animation.Skeleton {
     });
 }
 
+fn expectFloat4x4(expected: math.Float4x4, actual: math.Float4x4) !void {
+    for (expected.cols, actual.cols) |expected_col, actual_col| {
+        for (expected_col, actual_col) |expected_value, actual_value| {
+            try h.expectFloat(expected_value, actual_value);
+        }
+    }
+}
+
 test "Name/SkeletonUtils" {
     var skeleton = try makeSkeleton(std.testing.allocator);
     defer skeleton.deinit();
@@ -35,6 +43,83 @@ test "InterateDF/SkeletonUtils" {
     try std.testing.expectEqual(@as(usize, 3), animation.subtreeEnd(skeleton, 1));
     try std.testing.expectEqual(@as(usize, 4), animation.subtreeEnd(skeleton, 0));
     try std.testing.expectEqual(@as(usize, 2), try animation.jointDepth(skeleton, 2));
+
+    const Visitor = struct {
+        skeleton: *const animation.Skeleton,
+        joints: *std.ArrayList(usize),
+        allocator: std.mem.Allocator,
+
+        pub fn visit(self: *@This(), joint: usize, parent: i16) void {
+            std.testing.expectEqual(self.skeleton.parents[joint], parent) catch unreachable;
+            self.joints.append(self.allocator, joint) catch unreachable;
+        }
+    };
+    var joints: std.ArrayList(usize) = .empty;
+    defer joints.deinit(std.testing.allocator);
+    var visitor: Visitor = .{
+        .skeleton = &skeleton,
+        .joints = &joints,
+        .allocator = std.testing.allocator,
+    };
+
+    animation.iterateJointsDF(skeleton, null, &visitor);
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, 2, 3 }, joints.items);
+    joints.clearRetainingCapacity();
+    animation.iterateJointsDF(skeleton, 1, &visitor);
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, joints.items);
+    joints.clearRetainingCapacity();
+    animation.iterateJointsDF(skeleton, 2, &visitor);
+    try std.testing.expectEqualSlices(usize, &.{2}, joints.items);
+    joints.clearRetainingCapacity();
+    animation.iterateJointsDF(skeleton, 99, &visitor);
+    try std.testing.expectEqual(@as(usize, 0), joints.items.len);
+}
+
+test "InterateDFReverse/SkeletonUtils" {
+    var skeleton = try makeSkeleton(std.testing.allocator);
+    defer skeleton.deinit();
+    const Visitor = struct {
+        visited: *[4]bool,
+        order: *std.ArrayList(usize),
+        allocator: std.mem.Allocator,
+
+        pub fn visit(self: *@This(), joint: usize, parent: i16) void {
+            // In reverse depth-first order a parent cannot have been visited
+            // before any of its children.
+            if (parent != animation.no_parent) {
+                std.testing.expect(!self.visited[@intCast(parent)]) catch unreachable;
+            }
+            std.testing.expect(!self.visited[joint]) catch unreachable;
+            self.visited[joint] = true;
+            self.order.append(self.allocator, joint) catch unreachable;
+        }
+    };
+    var visited = [_]bool{ false, false, false, false };
+    var order: std.ArrayList(usize) = .empty;
+    defer order.deinit(std.testing.allocator);
+    var visitor: Visitor = .{
+        .visited = &visited,
+        .order = &order,
+        .allocator = std.testing.allocator,
+    };
+    animation.iterateJointsDFReverse(skeleton, &visitor);
+    try std.testing.expectEqualSlices(usize, &.{ 3, 2, 1, 0 }, order.items);
+}
+
+test "InterateDFEmpty/SkeletonUtils" {
+    var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{});
+    defer skeleton.deinit();
+    const Visitor = struct {
+        visited: *bool,
+        pub fn visit(self: *@This(), _: usize, _: i16) void {
+            self.visited.* = true;
+        }
+    };
+    var visited = false;
+    var visitor: Visitor = .{ .visited = &visited };
+    animation.iterateJointsDF(skeleton, null, &visitor);
+    animation.iterateJointsDFReverse(skeleton, &visitor);
+    try std.testing.expect(!visited);
 }
 
 test "JobValidity/SamplingJob" {
@@ -47,6 +132,135 @@ test "JobValidity/SamplingJob" {
         animation.Error.ContextTooSmall,
         animation.sample(&animation_value, 0, &small_context, &output),
     );
+}
+
+test "SamplingNoTrack/SamplingJob" {
+    const empty: animation.Animation = .{
+        .allocator = std.testing.allocator,
+        .name = &.{},
+        .duration = 0,
+        .tracks = &.{},
+    };
+    var context = try animation.SamplingContext.init(std.testing.allocator, 0);
+    defer context.deinit();
+    const sentinel: math.SoaTransform = .{
+        .translation = .{
+            .x = @splat(46),
+            .y = @splat(-1),
+            .z = @splat(2),
+        },
+        .rotation = math.SoaTransform.identity.rotation,
+        .scale = .{
+            .x = @splat(3),
+            .y = @splat(4),
+            .z = @splat(5),
+        },
+    };
+    var output = [_]math.SoaTransform{sentinel};
+    try animation.sample(&empty, 0, &context, &output);
+    try std.testing.expectEqual(sentinel, output[0]);
+}
+
+test "Sampling/SamplingJob" {
+    var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
+        .{ .translations = &.{.{ .ratio = 0.2, .value = .{ .x = -1 } }} },
+        .{},
+        .{ .translations = &.{
+            .{ .ratio = 0, .value = .{ .x = 2 } },
+            .{ .ratio = 0.2, .value = .{ .x = 6 } },
+            .{ .ratio = 0.4, .value = .{ .x = 8 } },
+            .{ .ratio = 0.6, .value = .{ .x = 10 } },
+            .{ .ratio = 1, .value = .{ .x = 11 } },
+        } },
+        .{ .translations = &.{
+            .{ .ratio = 0.2, .value = .{ .x = 7 } },
+            .{ .ratio = 0.6, .value = .{ .x = 9 } },
+        } },
+    });
+    defer value.deinit();
+    var context = try animation.SamplingContext.init(std.testing.allocator, 4);
+    defer context.deinit();
+    var output: [1]math.SoaTransform = undefined;
+
+    const cases = [_]struct { ratio: f32, expected: [4]f32 }{
+        .{ .ratio = -0.2, .expected = .{ -1, 0, 2, 7 } },
+        .{ .ratio = 0, .expected = .{ -1, 0, 2, 7 } },
+        .{ .ratio = 0.0000001, .expected = .{ -1, 0, 2.000002, 7 } },
+        .{ .ratio = 0.1, .expected = .{ -1, 0, 4, 7 } },
+        .{ .ratio = 0.2, .expected = .{ -1, 0, 6, 7 } },
+        .{ .ratio = 0.3, .expected = .{ -1, 0, 7, 7.5 } },
+        .{ .ratio = 0.4, .expected = .{ -1, 0, 8, 8 } },
+        .{ .ratio = 0.3999999, .expected = .{ -1, 0, 7.999999, 8 } },
+        .{ .ratio = 0.4000001, .expected = .{ -1, 0, 8.000001, 8.000001 } },
+        .{ .ratio = 0.5, .expected = .{ -1, 0, 9, 8.5 } },
+        .{ .ratio = 0.6, .expected = .{ -1, 0, 10, 9 } },
+        .{ .ratio = 0.9999999, .expected = .{ -1, 0, 11, 9 } },
+        .{ .ratio = 1, .expected = .{ -1, 0, 11, 9 } },
+        .{ .ratio = 1.000001, .expected = .{ -1, 0, 11, 9 } },
+        // Deliberate backward seeks verify cache invalidation.
+        .{ .ratio = 0.5, .expected = .{ -1, 0, 9, 8.5 } },
+        .{ .ratio = 0.9999999, .expected = .{ -1, 0, 11, 9 } },
+        .{ .ratio = 0.0000001, .expected = .{ -1, 0, 2.000002, 7 } },
+    };
+    for (cases) |case| {
+        try animation.sample(&value, case.ratio, &context, &output);
+        for (0..4) |lane| {
+            const sampled = math.soaLane(output[0], lane);
+            try h.expectFloat(case.expected[lane], sampled.translation.x);
+            try h.expectFloat3(.{ .x = case.expected[lane] }, sampled.translation);
+            try h.expectQuaternion(.identity, sampled.rotation);
+            try h.expectFloat3(.one, sampled.scale);
+        }
+    }
+}
+
+test "SamplingTranslationRotationScaleAndClamp/SamplingJob" {
+    var value = try animation.Animation.init(std.testing.allocator, "", 1, &.{
+        .{ .translations = &.{
+            .{ .ratio = 0.5, .value = .{ .x = 1, .y = 2, .z = 4 } },
+            .{ .ratio = 0.8, .value = .{ .x = 2, .y = 4, .z = 8 } },
+        } },
+        .{ .rotations = &.{
+            .{ .ratio = 0, .value = .identity },
+            .{ .ratio = 1, .value = .{ .y = 1, .w = 0 } },
+        } },
+        .{ .scales = &.{
+            .{ .ratio = 0.5, .value = .zero },
+            .{ .ratio = 0.8, .value = .{ .x = -1, .y = -1, .z = -1 } },
+        } },
+        .{ .translations = &.{
+            .{ .ratio = 0, .value = .{ .x = -1, .y = -2, .z = -4 } },
+            .{ .ratio = 1, .value = .{ .x = -2, .y = -4, .z = -8 } },
+        } },
+    });
+    defer value.deinit();
+    var context = try animation.SamplingContext.init(std.testing.allocator, 4);
+    defer context.deinit();
+    var output: [1]math.SoaTransform = undefined;
+
+    try animation.sample(&value, -1, &context, &output);
+    try h.expectTransform(.{
+        .translation = .{ .x = 1, .y = 2, .z = 4 },
+    }, math.soaLane(output[0], 0));
+    try h.expectTransform(.{
+        .rotation = .identity,
+    }, math.soaLane(output[0], 1));
+    try h.expectTransform(.{
+        .scale = .zero,
+    }, math.soaLane(output[0], 2));
+    try h.expectTransform(.{
+        .translation = .{ .x = -1, .y = -2, .z = -4 },
+    }, math.soaLane(output[0], 3));
+
+    try animation.sample(&value, 0.5, &context, &output);
+    try h.expectQuaternion(.{ .y = 0.70710677, .w = 0.70710677 }, math.soaLane(output[0], 1).rotation);
+    try h.expectFloat3(.{ .x = -1.5, .y = -3, .z = -6 }, math.soaLane(output[0], 3).translation);
+
+    try animation.sample(&value, 2, &context, &output);
+    try h.expectFloat3(.{ .x = 2, .y = 4, .z = 8 }, math.soaLane(output[0], 0).translation);
+    try h.expectQuaternion(.{ .y = 1, .w = 0 }, math.soaLane(output[0], 1).rotation);
+    try h.expectFloat3(.{ .x = -1, .y = -1, .z = -1 }, math.soaLane(output[0], 2).scale);
+    try h.expectFloat3(.{ .x = -2, .y = -4, .z = -8 }, math.soaLane(output[0], 3).translation);
 }
 
 test "Sampling1Track0Key/SamplingJob" {
@@ -132,41 +346,273 @@ test "TransformationFromTo/LocalToModel" {
     try h.expectFloat3(.{ .x = 10, .z = 3 }, math.Float4x4.translation(output[2]));
 }
 
+test "RangesAndExcludedRoot/LocalToModel" {
+    var skeleton = try makeSkeleton(std.testing.allocator);
+    defer skeleton.deinit();
+    var local = [_]math.Transform{
+        .{ .translation = .{ .x = 1 } },
+        .{ .translation = .{ .y = 2 } },
+        .{ .translation = .{ .z = 3 } },
+        .{ .translation = .{ .x = 4 } },
+    };
+    var input: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&local, &input);
+
+    const untouched = math.Float4x4.fromTransform(.{ .translation = .{ .x = 99, .y = 99, .z = 99 } });
+    var output = [_]math.Float4x4{ untouched, untouched, untouched, untouched };
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 0,
+        .to = 1,
+    }, &output);
+    try h.expectFloat3(.{ .x = 1 }, math.Float4x4.translation(output[0]));
+    try h.expectFloat3(.{ .x = 1, .y = 2 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[3]));
+
+    // Excluding `from` consumes its existing model matrix, allowing callers
+    // to update descendants after an external parent/root update.
+    output = .{ untouched, untouched, untouched, untouched };
+    output[0] = math.Float4x4.fromTransform(.{
+        .translation = .{ .x = 10 },
+        .scale = .{ .x = 2, .y = 2, .z = 2 },
+    });
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 0,
+        .from_excluded = true,
+    }, &output);
+    try h.expectFloat3(.{ .x = 10 }, math.Float4x4.translation(output[0]));
+    try h.expectFloat3(.{ .x = 10, .y = 4 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ .x = 10, .y = 4, .z = 6 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ .x = 18 }, math.Float4x4.translation(output[3]));
+
+    // A subtree update does not touch the later sibling branch.
+    output[1] = untouched;
+    output[2] = untouched;
+    output[3] = untouched;
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 1,
+    }, &output);
+    try h.expectFloat3(.{ .x = 10, .y = 4 }, math.Float4x4.translation(output[1]));
+    try h.expectFloat3(.{ .x = 10, .y = 4, .z = 6 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ .x = 99, .y = 99, .z = 99 }, math.Float4x4.translation(output[3]));
+}
+
 test "Empty/LocalToModel" {
     var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{});
     defer skeleton.deinit();
     try animation.localToModel(.{ .skeleton = &skeleton, .input = &.{} }, &.{});
 }
 
+test "FullTRSAndRoot/LocalToModel" {
+    var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
+        .{ .name = "j0", .parent = animation.no_parent },
+        .{ .name = "j1", .parent = 0 },
+        .{ .name = "j2", .parent = 1 },
+        .{ .name = "j3", .parent = 0 },
+        .{ .name = "j4", .parent = 3 },
+        .{ .name = "j5", .parent = 3 },
+    });
+    defer skeleton.deinit();
+
+    const sqrt_half: f32 = @sqrt(0.5);
+    var local = [_]math.Transform{
+        .{ .translation = .{ .x = 2, .y = 2, .z = 2 } },
+        .{
+            .rotation = .{ .y = sqrt_half, .w = sqrt_half },
+        },
+        .{
+            .translation = .{ .x = 1, .y = 2, .z = 4 },
+            .scale = .{ .x = 10, .y = 10, .z = 10 },
+        },
+        .{
+            .translation = .{ .x = -2, .y = -2, .z = -2 },
+            .scale = .{ .x = 10, .y = 10, .z = 10 },
+        },
+        .{ .translation = .{ .x = 12, .y = 46, .z = -12 } },
+        .{ .scale = .{ .x = -0.1, .y = -0.1, .z = -0.1 } },
+    };
+    var input: [2]math.SoaTransform = undefined;
+    math.aosToSoa(&local, &input);
+    var output: [6]math.Float4x4 = undefined;
+
+    try animation.localToModel(.{ .skeleton = &skeleton, .input = &input }, &output);
+    const expected = [_]math.Float4x4{
+        .{ .cols = .{ .{ 1, 0, 0, 0 }, .{ 0, 1, 0, 0 }, .{ 0, 0, 1, 0 }, .{ 2, 2, 2, 1 } } },
+        .{ .cols = .{ .{ 0, 0, -1, 0 }, .{ 0, 1, 0, 0 }, .{ 1, 0, 0, 0 }, .{ 2, 2, 2, 1 } } },
+        .{ .cols = .{ .{ 0, 0, -10, 0 }, .{ 0, 10, 0, 0 }, .{ 10, 0, 0, 0 }, .{ 6, 4, 1, 1 } } },
+        .{ .cols = .{ .{ 10, 0, 0, 0 }, .{ 0, 10, 0, 0 }, .{ 0, 0, 10, 0 }, .{ 0, 0, 0, 1 } } },
+        .{ .cols = .{ .{ 10, 0, 0, 0 }, .{ 0, 10, 0, 0 }, .{ 0, 0, 10, 0 }, .{ 120, 460, -120, 1 } } },
+        .{ .cols = .{ .{ -1, 0, 0, 0 }, .{ 0, -1, 0, 0 }, .{ 0, 0, -1, 0 }, .{ 0, 0, 0, 1 } } },
+    };
+    for (expected, output) |expected_matrix, actual_matrix| {
+        try expectFloat4x4(expected_matrix, actual_matrix);
+    }
+
+    const root = math.Float4x4.fromTransform(.{ .translation = .{ .x = 4, .y = 3, .z = 2 } });
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .root = root,
+    }, &output);
+    for (expected, output) |expected_matrix, actual_matrix| {
+        var rooted = expected_matrix;
+        rooted.cols[3][0] += 4;
+        rooted.cols[3][1] += 3;
+        rooted.cols[3][2] += 2;
+        try expectFloat4x4(rooted, actual_matrix);
+    }
+}
+
+test "RangeBoundariesAndMultipleRoots/LocalToModel" {
+    var skeleton = try animation.Skeleton.init(std.testing.allocator, &.{
+        .{ .name = "root-a", .parent = animation.no_parent },
+        .{ .name = "a-child", .parent = 0 },
+        .{ .name = "a-leaf", .parent = 1 },
+        .{ .name = "root-b", .parent = animation.no_parent },
+    });
+    defer skeleton.deinit();
+    var local = [_]math.Transform{
+        .{ .translation = .{ .x = 1 } },
+        .{ .translation = .{ .y = 2 } },
+        .{ .translation = .{ .z = 3 } },
+        .{ .translation = .{ .x = 4 } },
+    };
+    var input: [1]math.SoaTransform = undefined;
+    math.aosToSoa(&local, &input);
+    const sentinel = math.Float4x4.fromTransform(.{ .translation = .{ .x = 99 } });
+    var output = [_]math.Float4x4{ sentinel, sentinel, sentinel, sentinel };
+
+    // A bounded update is inclusive and cannot escape the selected subtree.
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 0,
+        .to = 99,
+    }, &output);
+    try h.expectFloat3(.{ .x = 1, .y = 2, .z = 3 }, math.Float4x4.translation(output[2]));
+    try h.expectFloat3(.{ .x = 99 }, math.Float4x4.translation(output[3]));
+
+    // `to` before `from`, and an out-of-range `from`, are successful no-ops.
+    output = .{ sentinel, sentinel, sentinel, sentinel };
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 2,
+        .to = 1,
+    }, &output);
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 93,
+    }, &output);
+    for (output) |matrix| try expectFloat4x4(sentinel, matrix);
+
+    // Selecting the second root updates it without consuming the first tree.
+    try animation.localToModel(.{
+        .skeleton = &skeleton,
+        .input = &input,
+        .from = 3,
+    }, &output);
+    try h.expectFloat3(.{ .x = 4 }, math.Float4x4.translation(output[3]));
+    for (output[0..3]) |matrix| try expectFloat4x4(sentinel, matrix);
+}
+
+test "JobValidityAndDefault/TrackSamplingJob" {
+    // The Zig sampling API has no separately invalid job object: a track and
+    // returned value are required by the function signature. An empty runtime
+    // track is nevertheless valid and has the same default result as Ozz.
+    var track = try animation.FloatTrack.init(std.testing.allocator, "", &.{}, .linear);
+    defer track.deinit();
+    try h.expectFloat(0, track.sampleAt(0.5));
+}
+
 test "Float/TrackSamplingJob" {
     var track = try animation.FloatTrack.initMixed(std.testing.allocator, "float", &.{
         .{ .ratio = 0, .value = 0 },
-        .{ .ratio = 0.5, .value = 2, .interpolation = .step },
-        .{ .ratio = 1, .value = 4 },
+        .{ .ratio = 0.5, .value = 4.6, .interpolation = .step },
+        .{ .ratio = 0.7, .value = 9.2 },
+        .{ .ratio = 0.9, .value = 0 },
     });
     defer track.deinit();
-    try h.expectFloat(1, track.sampleAt(0.25));
-    try h.expectFloat(2, track.sampleAt(0.75));
-}
-
-test "Quaternion/TrackSamplingJob" {
-    const end = math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 2);
-    var track = try animation.QuaternionTrack.init(std.testing.allocator, "", &.{
-        .{ .ratio = 0, .value = .identity },
-        .{ .ratio = 1, .value = end },
-    }, .linear);
-    defer track.deinit();
-    const rotated = math.Quaternion.rotate(track.sampleAt(0.5), .x_axis);
-    const sqrt_half: f32 = @sqrt(0.5);
-    try h.expectFloat3(.{ .x = sqrt_half, .y = sqrt_half }, rotated);
+    const cases = [_][2]f32{
+        .{ 0, 0 },     .{ 0.25, 2.3 }, .{ 0.5, 4.6 },
+        .{ 0.6, 4.6 }, .{ 0.7, 9.2 },  .{ 0.8, 4.6 },
+        .{ 0.9, 0 },   .{ 1, 0 },
+    };
+    for (cases) |case| try h.expectFloat(case[1], track.sampleAt(case[0]));
 }
 
 test "Run/MotionBlendingJob" {
-    const result = animation.blendMotion(&.{
-        .{ .delta = .{ .translation = .{ .x = 2 } }, .weight = 0.5 },
-        .{ .delta = .{ .translation = .{ .y = 4 } }, .weight = 0.5 },
+    const sqrt_half: f32 = @sqrt(0.5);
+    const first: math.Transform = .{
+        .translation = .{ .x = 2 },
+        .rotation = .{ .x = sqrt_half, .w = sqrt_half },
+    };
+    const second: math.Transform = .{
+        .translation = .{ .z = 3 },
+        // Same hemisphere correction case as upstream: the negative
+        // quaternion represents the intended positive-y rotation.
+        .rotation = .{ .y = -sqrt_half, .w = -sqrt_half },
+    };
+
+    try h.expectTransform(.identity, animation.blendMotion(&.{}));
+    try h.expectTransform(.identity, animation.blendMotion(&.{
+        .{ .delta = first, .weight = 0 },
+        .{ .delta = second, .weight = 0 },
+    }));
+    try h.expectTransform(first, animation.blendMotion(&.{
+        .{ .delta = first, .weight = 0.8 },
+        .{ .delta = second, .weight = -1 },
+    }));
+
+    const expected_blend: math.Transform = .{
+        .translation = .{ .x = 2.134313, .z = 0.533578 },
+        .rotation = .{ .x = 0.6172133, .y = 0.1543033, .w = 0.7715167 },
+    };
+    try h.expectTransform(expected_blend, animation.blendMotion(&.{
+        .{ .delta = first, .weight = 0.8 },
+        .{ .delta = second, .weight = 0.2 },
+    }));
+    // Weight magnitude is normalized away.
+    try h.expectTransform(expected_blend, animation.blendMotion(&.{
+        .{ .delta = first, .weight = 8 },
+        .{ .delta = second, .weight = 2 },
+    }));
+    try h.expectTransform(expected_blend, animation.blendMotion(&.{
+        .{ .delta = first, .weight = 0.08 },
+        .{ .delta = second, .weight = 0.02 },
+    }));
+
+    var zero_length = first;
+    zero_length.translation = .zero;
+    var z_motion = second;
+    z_motion.translation = .{ .z = 2 };
+    const zero_result = animation.blendMotion(&.{
+        .{ .delta = zero_length, .weight = 0.8 },
+        .{ .delta = z_motion, .weight = 0.2 },
     });
-    try h.expectFloat(3, math.Float3.length(result.translation));
+    try h.expectFloat3(.{ .z = 0.4 }, zero_result.translation);
+    try h.expectQuaternion(expected_blend.rotation, zero_result.rotation);
+    try h.expectFloat3(.one, zero_result.scale);
+
+    var backward = first;
+    backward.translation = .{ .z = -2 };
+    const opposed = animation.blendMotion(&.{
+        .{ .delta = backward, .weight = 1 },
+        .{ .delta = z_motion, .weight = 1 },
+    });
+    try h.expectFloat3(.zero, opposed.translation);
+    try h.expectQuaternion(
+        .{ .x = 0.408248, .y = 0.408248, .w = 0.816496 },
+        opposed.rotation,
+    );
+    try h.expectFloat3(.one, opposed.scale);
 }
 
 test "Correction/IKAimJob" {
@@ -421,37 +867,64 @@ test "CountKeyframes/AnimationUtils" {
     try std.testing.expectEqual(@as(usize, 0), animation.countTranslationKeyframes(value, 1));
 }
 
-fn expectTrackSample(comptime T: type, a: T, b: T) !void {
-    var track = try animation.Track(T).init(std.testing.allocator, "", &.{
-        .{ .ratio = 0, .value = a },
-        .{ .ratio = 1, .value = b },
-    }, .linear);
+fn expectTrackValue(comptime T: type, expected: T, actual: T) !void {
+    if (T == math.Float2) {
+        try h.expectFloat(expected.x, actual.x);
+        try h.expectFloat(expected.y, actual.y);
+    } else if (T == math.Float3) {
+        try h.expectFloat3(expected, actual);
+    } else if (T == math.Float4) {
+        try h.expectFloat(expected.x, actual.x);
+        try h.expectFloat(expected.y, actual.y);
+        try h.expectFloat(expected.z, actual.z);
+        try h.expectFloat(expected.w, actual.w);
+    } else {
+        @compileError("unsupported test track type");
+    }
+}
+
+fn expectVectorTrackSampling(comptime T: type, key1: T, key2: T, first_midpoint: T, last_midpoint: T) !void {
+    const zero: T = .zero;
+    var track = try animation.Track(T).initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = zero },
+        .{ .ratio = 0.5, .value = key1, .interpolation = .step },
+        .{ .ratio = 0.7, .value = key2 },
+        .{ .ratio = 0.9, .value = zero },
+    });
     defer track.deinit();
-    _ = track.sampleAt(0.5);
-    try std.testing.expectEqual(a, track.sampleAt(-1));
-    try std.testing.expectEqual(b, track.sampleAt(2));
+    try expectTrackValue(T, zero, track.sampleAt(0));
+    try expectTrackValue(T, first_midpoint, track.sampleAt(0.25));
+    try expectTrackValue(T, key1, track.sampleAt(0.5));
+    try expectTrackValue(T, key1, track.sampleAt(0.6));
+    try expectTrackValue(T, key2, track.sampleAt(0.7));
+    try expectTrackValue(T, last_midpoint, track.sampleAt(0.8));
+    try expectTrackValue(T, zero, track.sampleAt(0.9));
+    try expectTrackValue(T, zero, track.sampleAt(1));
 }
 
 test "Float2/TrackSamplingJob" {
-    try expectTrackSample(math.Float2, .zero, .one);
+    try expectVectorTrackSampling(math.Float2, .{ .x = 2.3, .y = 4.6 }, .{ .x = 4.6, .y = 9.2 }, .{ .x = 1.15, .y = 2.3 }, .{ .x = 2.3, .y = 4.6 });
 }
 
 test "Float3/TrackSamplingJob" {
-    try expectTrackSample(math.Float3, .zero, .one);
+    try expectVectorTrackSampling(math.Float3, .{ .y = 2.3, .z = 4.6 }, .{ .y = 4.6, .z = 9.2 }, .{ .y = 1.15, .z = 2.3 }, .{ .y = 2.3, .z = 4.6 });
 }
 
 test "Float4/TrackSamplingJob" {
-    try expectTrackSample(math.Float4, .zero, .one);
+    try expectVectorTrackSampling(math.Float4, .{ .y = 2.3, .w = 4.6 }, .{ .y = 4.6, .w = 9.2 }, .{ .y = 1.15, .w = 2.3 }, .{ .y = 2.3, .w = 4.6 });
 }
 
 test "Bounds/TrackSamplingJob" {
-    var track = try animation.FloatTrack.init(std.testing.allocator, "", &.{
-        .{ .ratio = 0.25, .value = 1 },
-        .{ .ratio = 0.75, .value = 2 },
-    }, .linear);
+    var track = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0 },
+        .{ .ratio = 0.5, .value = 46, .interpolation = .step },
+        .{ .ratio = 0.7, .value = 0 },
+    });
     defer track.deinit();
-    try h.expectFloat(1, track.sampleAt(-46));
-    try h.expectFloat(2, track.sampleAt(93));
+    for ([_][2]f32{
+        .{ -0.0000001, 0 }, .{ 0, 0 },         .{ 0.5, 46 },
+        .{ 1, 0 },          .{ 1.0000001, 0 }, .{ 1.5, 0 },
+    }) |case| try h.expectFloat(case[1], track.sampleAt(case[0]));
 }
 
 test "Constant/TrackSamplingJob" {
@@ -461,6 +934,30 @@ test "Constant/TrackSamplingJob" {
     defer track.deinit();
     try h.expectFloat(93, track.sampleAt(0));
     try h.expectFloat(93, track.sampleAt(1));
+}
+
+test "Quaternion/TrackSamplingJob" {
+    const qx: math.Quaternion = .{ .x = 0.70710677, .w = 0.70710677 };
+    const qy: math.Quaternion = .{ .y = 0.70710677, .w = 0.70710677 };
+    var track = try animation.QuaternionTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = qx },
+        .{ .ratio = 0.5, .value = qy, .interpolation = .step },
+        .{ .ratio = 0.7, .value = qx },
+        .{ .ratio = 0.9, .value = .identity },
+    });
+    defer track.deinit();
+    const cases = [_]struct { ratio: f32, expected: math.Quaternion }{
+        .{ .ratio = 0, .expected = qx },
+        .{ .ratio = 0.1, .expected = .{ .x = 0.61721331, .y = 0.15430345, .w = 0.77151674 } },
+        .{ .ratio = 0.4999999, .expected = qy },
+        .{ .ratio = 0.5, .expected = qy },
+        .{ .ratio = 0.6, .expected = qy },
+        .{ .ratio = 0.7, .expected = qx },
+        .{ .ratio = 0.8, .expected = .{ .x = 0.38268333, .w = 0.92387962 } },
+        .{ .ratio = 0.9, .expected = .identity },
+        .{ .ratio = 1, .expected = .identity },
+    };
+    for (cases) |case| try h.expectQuaternion(case.expected, track.sampleAt(case.ratio));
 }
 
 test "SquareStep/TrackEdgeTriggerJob" {
@@ -523,8 +1020,208 @@ test "TargetTooClose/IKAimJob" {
         .target = .zero,
         .joint = .identity,
     });
-    try std.testing.expect(!result.reached);
+    try std.testing.expect(result.reached);
     try h.expectQuaternion(.identity, result.correction);
+}
+
+test "MatrixVariants/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const joints = [_]math.Float4x4{
+        .identity,
+        math.Float4x4.fromTransform(.{ .translation = .y_axis }),
+        math.Float4x4.fromTransform(.{ .rotation = math.Quaternion.fromAxisAngle(.x_axis, pi / 3) }),
+        math.Float4x4.fromTransform(.{ .scale = .{ .x = 2, .y = 2, .z = 2 } }),
+        math.Float4x4.fromTransform(.{ .scale = .{ .x = 1, .y = 2, .z = 1 } }),
+        math.Float4x4.fromTransform(.{ .scale = .{ .x = -3, .y = -3, .z = -3 } }),
+    };
+    const local_targets = [_]math.Float3{
+        .x_axis,
+        .{ .x = -1 },
+        .z_axis,
+        .{ .z = -1 },
+        .{ .x = 1, .y = 1 },
+        .{ .x = 2, .y = 2 },
+    };
+    const expected = [_]math.Quaternion{
+        .identity,
+        math.Quaternion.fromAxisAngle(.y_axis, pi),
+        math.Quaternion.fromAxisAngle(.y_axis, -pi / 2),
+        math.Quaternion.fromAxisAngle(.y_axis, pi / 2),
+        math.Quaternion.fromAxisAngle(.z_axis, pi / 4),
+        math.Quaternion.fromAxisAngle(.z_axis, pi / 4),
+    };
+    for (joints) |joint| {
+        const pole = math.Float4x4.transformVector(joint, .y_axis);
+        for (local_targets, expected) |target, expected_correction| {
+            const result = try animation.aimIk(.{
+                .target = math.Float4x4.transformPoint(joint, target),
+                .joint = joint,
+                .pole_vector = pole,
+            });
+            try std.testing.expect(result.reached);
+            try h.expectQuaternion(expected_correction, result.correction);
+        }
+    }
+}
+
+test "ForwardUpPoleAndAlignment/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    var options: animation.AimOptions = .{
+        .target = .x_axis,
+        .joint = .identity,
+    };
+
+    options.forward = .{ .x = -1 };
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.y_axis, pi),
+        (try animation.aimIk(options)).correction,
+    );
+    options.forward = .z_axis;
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.y_axis, pi / 2),
+        (try animation.aimIk(options)).correction,
+    );
+
+    options.forward = .x_axis;
+    options.up = .z_axis;
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.x_axis, -pi / 2),
+        (try animation.aimIk(options)).correction,
+    );
+    options.up = .zero;
+    try h.expectQuaternion(.identity, (try animation.aimIk(options)).correction);
+
+    options.up = .y_axis;
+    options.pole_vector = .z_axis;
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.x_axis, pi / 2),
+        (try animation.aimIk(options)).correction,
+    );
+
+    options.target = .y_axis;
+    options.pole_vector = .y_axis;
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, pi / 2),
+        (try animation.aimIk(options)).correction,
+    );
+}
+
+test "JobValidity/IKAimJob" {
+    try std.testing.expectError(animation.Error.InvalidLayer, animation.aimIk(.{
+        .target = .x_axis,
+        .joint = .identity,
+        .forward = .{ .x = 0.5 },
+    }));
+    try std.testing.expectError(animation.Error.InvalidLayer, animation.aimIk(.{
+        .target = .x_axis,
+        .joint = .identity,
+        .forward = .zero,
+    }));
+    try std.testing.expect((try animation.aimIk(.{
+        .target = .x_axis,
+        .joint = .identity,
+    })).reached);
+}
+
+test "Up/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const cases = [_]struct {
+        up: math.Float3,
+        expected: math.Quaternion,
+    }{
+        .{ .up = .y_axis, .expected = .identity },
+        .{ .up = .{ .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi) },
+        .{ .up = .z_axis, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
+        .{ .up = .{ .z = 2 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
+        .{ .up = .{ .z = 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
+        .{ .up = .zero, .expected = .identity },
+    };
+    for (cases) |case| {
+        try h.expectQuaternion(case.expected, (try animation.aimIk(.{
+            .target = .x_axis,
+            .joint = .identity,
+            .up = case.up,
+        })).correction);
+    }
+}
+
+test "Pole/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const cases = [_]struct {
+        pole: math.Float3,
+        expected: math.Quaternion,
+    }{
+        .{ .pole = .y_axis, .expected = .identity },
+        .{ .pole = .{ .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi) },
+        .{ .pole = .z_axis, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
+        .{ .pole = .{ .z = 2 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
+        .{ .pole = .{ .z = 1e-9 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
+    };
+    for (cases) |case| {
+        try h.expectQuaternion(case.expected, (try animation.aimIk(.{
+            .target = .x_axis,
+            .joint = .identity,
+            .pole_vector = case.pole,
+        })).correction);
+    }
+}
+
+test "AlignedTargetUp/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const cases = [_]struct {
+        target: math.Float3,
+        expected: math.Quaternion,
+    }{
+        .{ .target = .x_axis, .expected = .identity },
+        .{ .target = .y_axis, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
+        .{ .target = .{ .y = 2 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
+        .{ .target = .{ .y = -2 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2) },
+    };
+    for (cases) |case| {
+        try h.expectQuaternion(case.expected, (try animation.aimIk(.{
+            .target = case.target,
+            .joint = .identity,
+        })).correction);
+    }
+}
+
+test "AlignedTargetPole/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    try h.expectQuaternion(.identity, (try animation.aimIk(.{
+        .target = .x_axis,
+        .joint = .identity,
+    })).correction);
+    try h.expectQuaternion(math.Quaternion.fromAxisAngle(.z_axis, pi / 2), (try animation.aimIk(.{
+        .target = .y_axis,
+        .joint = .identity,
+        .pole_vector = .y_axis,
+    })).correction);
+}
+
+test "OffsetReachability/IKAimJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const cases = [_]struct {
+        offset: math.Float3,
+        expected: math.Quaternion,
+        reached: bool,
+    }{
+        .{ .offset = .zero, .expected = .identity, .reached = true },
+        .{ .offset = .{ .y = std.math.sqrt(0.5) }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 4), .reached = true },
+        .{ .offset = .{ .x = 0.5, .y = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 6), .reached = true },
+        .{ .offset = .{ .x = -0.5, .y = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 6), .reached = true },
+        .{ .offset = .{ .x = 0.5, .z = 0.5 }, .expected = math.Quaternion.fromAxisAngle(.y_axis, pi / 6), .reached = true },
+        .{ .offset = .y_axis, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2), .reached = true },
+        .{ .offset = .{ .y = 2 }, .expected = .identity, .reached = false },
+    };
+    for (cases) |case| {
+        const result = try animation.aimIk(.{
+            .target = .x_axis,
+            .joint = .identity,
+            .offset = case.offset,
+        });
+        try std.testing.expectEqual(case.reached, result.reached);
+        try h.expectQuaternion(case.expected, result.correction);
+    }
 }
 
 test "ZeroLengthBoneChain/IKTwoBoneJob" {
@@ -621,6 +1318,146 @@ test "TwistAndZeroScale/IKTwoBoneJob" {
     try std.testing.expect(!degenerate.reached);
 }
 
+test "Pole/IKTwoBoneJob" {
+    const pi: f32 = @floatCast(std.math.pi);
+    const cases = [_]struct {
+        pole: math.Float3,
+        target: math.Float3,
+        expected: math.Quaternion,
+    }{
+        .{ .pole = .y_axis, .target = .{ .x = 1, .y = 1 }, .expected = .identity },
+        .{ .pole = .z_axis, .target = .{ .x = 1, .z = 1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, pi / 2) },
+        .{ .pole = .{ .z = -1 }, .target = .{ .x = 1, .z = -1 }, .expected = math.Quaternion.fromAxisAngle(.x_axis, -pi / 2) },
+        .{ .pole = .x_axis, .target = .{ .x = 1, .y = -1 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, -pi / 2) },
+        .{ .pole = .{ .x = -1 }, .target = .{ .x = -1, .y = 1 }, .expected = math.Quaternion.fromAxisAngle(.z_axis, pi / 2) },
+    };
+    for (cases) |case| {
+        var options = bentIkOptions(case.target);
+        options.pole_vector = case.pole;
+        const result = try animation.twoBoneIk(options);
+        try std.testing.expect(result.reached);
+        try h.expectQuaternion(case.expected, result.start_correction);
+        try h.expectQuaternion(.identity, result.mid_correction);
+    }
+}
+
+test "PoleTargetAlignment/IKTwoBoneJob" {
+    const sqrt_two = @sqrt(@as(f32, 2));
+    var options = bentIkOptions(.{ .y = sqrt_two });
+    const aligned = try animation.twoBoneIk(options);
+    try std.testing.expect(aligned.reached);
+    try h.expectQuaternion(.identity, aligned.mid_correction);
+
+    options.target = .{ .x = 0.001, .y = sqrt_two };
+    const offset = try animation.twoBoneIk(options);
+    try std.testing.expect(offset.reached);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 4),
+        offset.start_correction,
+    );
+    try h.expectQuaternion(.identity, offset.mid_correction);
+
+    options.target = .{ .y = 3 };
+    const extended = try animation.twoBoneIk(options);
+    try std.testing.expect(!extended.reached);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, @as(f32, std.math.pi) / 2),
+        extended.mid_correction,
+    );
+}
+
+test "AlignedJointsAndTarget/IKTwoBoneJob" {
+    const options: animation.TwoBoneOptions = .{
+        .target = .{ .x = 2 },
+        .start_joint = .identity,
+        .mid_joint = math.Float4x4.fromTransform(.{ .translation = .x_axis }),
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .x = 2 } }),
+    };
+    const reachable = try animation.twoBoneIk(options);
+    try std.testing.expect(reachable.reached);
+    try h.expectQuaternion(.identity, reachable.start_correction);
+    try h.expectQuaternion(.identity, reachable.mid_correction);
+
+    var unreachable_options = options;
+    unreachable_options.target = .{ .x = 3 };
+    const beyond_reach = try animation.twoBoneIk(unreachable_options);
+    try std.testing.expect(!beyond_reach.reached);
+    try h.expectQuaternion(.identity, beyond_reach.start_correction);
+    try h.expectQuaternion(.identity, beyond_reach.mid_correction);
+}
+
+test "SoftenBoundariesAndWeightClamp/IKTwoBoneJob" {
+    const cases = [_]struct {
+        distance: f32,
+        soften: f32,
+        reached: bool,
+    }{
+        .{ .distance = 2, .soften = 1, .reached = true },
+        .{ .distance = 1, .soften = 0.5, .reached = true },
+        .{ .distance = 0.8, .soften = 0.5, .reached = true },
+        .{ .distance = 1.2, .soften = 0.5, .reached = false },
+        .{ .distance = 1.2, .soften = 0, .reached = false },
+        .{ .distance = 2, .soften = 0.5, .reached = false },
+        .{ .distance = 3, .soften = 1, .reached = false },
+    };
+    for (cases) |case| {
+        var options = bentIkOptions(.{ .x = case.distance });
+        options.soften = case.soften;
+        try std.testing.expectEqual(case.reached, (try animation.twoBoneIk(options)).reached);
+    }
+
+    var options = bentIkOptions(.{ .x = 2 });
+    options.weight = 1.1;
+    const above_one = try animation.twoBoneIk(options);
+    try std.testing.expect(above_one.reached);
+    options.weight = -0.1;
+    const below_zero = try animation.twoBoneIk(options);
+    try std.testing.expect(!below_zero.reached);
+    try h.expectQuaternion(.identity, below_zero.start_correction);
+    try h.expectQuaternion(.identity, below_zero.mid_correction);
+    options.weight = 0.5;
+    try std.testing.expect(!(try animation.twoBoneIk(options)).reached);
+}
+
+test "ParentScaleAndAlignedMid/IKTwoBoneJob" {
+    const parents = [_]math.Transform{
+        .{},
+        .{ .translation = .y_axis },
+        .{ .rotation = math.Quaternion.fromAxisAngle(.x_axis, @as(f32, std.math.pi) / 3) },
+        .{ .scale = .{ .x = 2, .y = 2, .z = 2 } },
+        .{ .scale = .{ .x = 1, .y = 2, .z = 1 } },
+        .{ .scale = .{ .x = -3, .y = -3, .z = -3 } },
+    };
+    const base_mid = math.Float4x4.fromTransform(.{ .translation = .y_axis });
+    const base_end = math.Float4x4.fromTransform(.{ .translation = .{ .x = 1, .y = 1 } });
+    for (parents) |parent_transform| {
+        const parent = math.Float4x4.fromTransform(parent_transform);
+        const result = try animation.twoBoneIk(.{
+            .target = math.Float4x4.transformPoint(parent, .{ .x = 1, .y = 1 }),
+            .start_joint = parent,
+            .mid_joint = math.Float4x4.mul(parent, base_mid),
+            .end_joint = math.Float4x4.mul(parent, base_end),
+            .pole_vector = math.Float4x4.transformVector(parent, .y_axis),
+        });
+        try std.testing.expect(result.reached);
+        try h.expectQuaternion(.identity, result.start_correction);
+        try h.expectQuaternion(.identity, result.mid_correction);
+    }
+
+    const aligned = try animation.twoBoneIk(.{
+        .target = .{ .x = 1, .y = 1 },
+        .start_joint = .identity,
+        .mid_joint = base_mid,
+        .end_joint = math.Float4x4.fromTransform(.{ .translation = .{ .y = 2 } }),
+    });
+    try std.testing.expect(aligned.reached);
+    try h.expectQuaternion(.identity, aligned.start_correction);
+    try h.expectQuaternion(
+        math.Quaternion.fromAxisAngle(.z_axis, -@as(f32, std.math.pi) / 2),
+        aligned.mid_correction,
+    );
+}
+
 test "ZeroScale/IKAimJob" {
     const result = try animation.aimIk(.{
         .target = .x_axis,
@@ -704,5 +1541,124 @@ test "MixedInterpolation/TrackEdgeTriggerJob" {
     try expectEdges(&track, 0, 1, 1, &.{
         .{ .ratio = 0.5, .rising = true },
         .{ .ratio = 0.75, .rising = false },
+    });
+}
+
+test "ThresholdInclusion/TrackEdgeTriggerJob" {
+    var step = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = -1, .interpolation = .step },
+        .{ .ratio = 0.5, .value = 1, .interpolation = .step },
+        .{ .ratio = 1, .value = -1, .interpolation = .step },
+    });
+    defer step.deinit();
+
+    // The lower value is included in the edge predicate, while the upper
+    // value is excluded. This matches the upstream [min, max) convention.
+    const expected_step = [_]animation.TrackEdge{
+        .{ .ratio = 0.5, .rising = true },
+        .{ .ratio = 1, .rising = false },
+    };
+    try expectEdges(&step, 0, 1, -1, &expected_step);
+    try expectEdges(&step, 0, 1, 0, &expected_step);
+    try expectEdges(&step, 0, 1, 0.5, &expected_step);
+    try expectEdges(&step, 0, 1, 1, &.{});
+    try expectEdges(&step, 0, 1, 2, &.{});
+    try expectEdges(&step, 0, 1, -2, &.{});
+
+    var linear = try animation.FloatTrack.init(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = -1 },
+        .{ .ratio = 0.5, .value = 1 },
+        .{ .ratio = 1, .value = -1 },
+    }, .linear);
+    defer linear.deinit();
+    try expectEdges(&linear, 0, 1, -1, &.{
+        .{ .ratio = 0, .rising = true },
+        .{ .ratio = 1, .rising = false },
+    });
+    try expectEdges(&linear, 0, 1, 0, &.{
+        .{ .ratio = 0.25, .rising = true },
+        .{ .ratio = 0.75, .rising = false },
+    });
+    try expectEdges(&linear, 0, 1, 0.5, &.{
+        .{ .ratio = 0.375, .rising = true },
+        .{ .ratio = 0.625, .rising = false },
+    });
+    try expectEdges(&linear, 0, 1, 1, &.{});
+    try expectEdges(&linear, 0, 1, 2, &.{});
+    try expectEdges(&linear, 0, 1, -2, &.{});
+}
+
+test "ConstantAndWrappedEndpoints/TrackEdgeTriggerJob" {
+    var constant = try animation.FloatTrack.init(std.testing.allocator, "", &.{
+        .{ .ratio = 0.5, .value = 46 },
+    }, .linear);
+    defer constant.deinit();
+    try expectEdges(&constant, 0, 1, 0, &.{});
+    try expectEdges(&constant, -46, 47, 46, &.{});
+
+    // A non-looping-looking two-key track still has an edge between its last
+    // and first key because triggering evaluates a repeating track.
+    var open_step = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.6, .value = 2, .interpolation = .step },
+    });
+    defer open_step.deinit();
+    try expectEdges(&open_step, 0, 1, 1, &.{
+        .{ .ratio = 0, .rising = false },
+        .{ .ratio = 0.6, .rising = true },
+    });
+    try expectEdges(&open_step, 1, 0, 1, &.{
+        .{ .ratio = 0.6, .rising = false },
+        .{ .ratio = 0, .rising = true },
+    });
+}
+
+test "IteratorRangeBoundaries/TrackEdgeTriggerJob" {
+    var track = try animation.FloatTrack.initMixed(std.testing.allocator, "", &.{
+        .{ .ratio = 0, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.2, .value = 2, .interpolation = .step },
+        .{ .ratio = 0.3, .value = 0, .interpolation = .step },
+        .{ .ratio = 0.4, .value = 1, .interpolation = .step },
+        .{ .ratio = 0.5, .value = 0, .interpolation = .step },
+    });
+    defer track.deinit();
+
+    const after_first = std.math.nextAfter(f32, 0.2, 1);
+    const before_last = std.math.nextAfter(f32, 0.5, 0);
+    const after_last = std.math.nextAfter(f32, 0.5, 1);
+    try expectEdges(&track, 0, 0.2, 0, &.{});
+    try expectEdges(&track, 0, after_first, 0, &.{
+        .{ .ratio = 0.2, .rising = true },
+    });
+    try expectEdges(&track, after_first, 1, 0, &.{
+        .{ .ratio = 0.3, .rising = false },
+        .{ .ratio = 0.4, .rising = true },
+        .{ .ratio = 0.5, .rising = false },
+    });
+    try expectEdges(&track, 0, before_last, 0, &.{
+        .{ .ratio = 0.2, .rising = true },
+        .{ .ratio = 0.3, .rising = false },
+        .{ .ratio = 0.4, .rising = true },
+    });
+    try expectEdges(&track, 0, after_last, 0, &.{
+        .{ .ratio = 0.2, .rising = true },
+        .{ .ratio = 0.3, .rising = false },
+        .{ .ratio = 0.4, .rising = true },
+        .{ .ratio = 0.5, .rising = false },
+    });
+
+    // Reverse traversal yields the same edges in reverse order with polarity
+    // inverted, including far positive and negative loop indices.
+    try expectEdges(&track, std.math.nextAfter(f32, 46.5, 100), 46, 0, &.{
+        .{ .ratio = 46.5, .rising = true },
+        .{ .ratio = 46.4, .rising = false },
+        .{ .ratio = 46.3, .rising = true },
+        .{ .ratio = 46.2, .rising = false },
+    });
+    try expectEdges(&track, -46, std.math.nextAfter(f32, -45.5, 100), 0, &.{
+        .{ .ratio = -45.8, .rising = true },
+        .{ .ratio = -45.7, .rising = false },
+        .{ .ratio = -45.6, .rising = true },
+        .{ .ratio = -45.5, .rising = false },
     });
 }

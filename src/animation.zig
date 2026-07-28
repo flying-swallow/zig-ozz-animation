@@ -140,7 +140,13 @@ pub const Animation = struct {
         duration: f32,
         inputs: []const JointTrackInput,
     ) !Animation {
-        if (!std.math.isFinite(duration) or duration <= 0) return Error.InvalidDuration;
+        // Match Ozz's default runtime Animation: an empty animation may have a
+        // zero duration. Populated animations still require positive time.
+        if (!std.math.isFinite(duration) or duration < 0 or
+            (duration == 0 and inputs.len != 0))
+        {
+            return Error.InvalidDuration;
+        }
         if (inputs.len > max_joints) return Error.InvalidTrackCount;
         const owned_name = try allocator.dupe(u8, name);
         errdefer allocator.free(owned_name);
@@ -371,6 +377,26 @@ pub fn jointDepth(skeleton: Skeleton, joint: usize) !usize {
     return depth;
 }
 
+/// Visits joints in depth-first storage order. A null `from` visits every
+/// root; otherwise only `from` and its descendants are visited.
+/// `visitor` must expose `visit(usize, i16)`.
+pub fn iterateJointsDF(skeleton: Skeleton, from: ?usize, visitor: anytype) void {
+    const begin = from orelse 0;
+    if (begin >= skeleton.numJoints()) return;
+    const end = if (from) |joint| subtreeEnd(skeleton, joint) else skeleton.numJoints();
+    for (begin..end) |joint| visitor.visit(joint, skeleton.parents[joint]);
+}
+
+/// Visits all joints in reverse depth-first order, ensuring every child is
+/// visited before its parent. `visitor` must expose `visit(usize, i16)`.
+pub fn iterateJointsDFReverse(skeleton: Skeleton, visitor: anytype) void {
+    var joint = skeleton.numJoints();
+    while (joint > 0) {
+        joint -= 1;
+        visitor.visit(joint, skeleton.parents[joint]);
+    }
+}
+
 pub const BlendLayer = struct {
     transforms: []const math.SoaTransform,
     weight: f32,
@@ -567,7 +593,9 @@ pub fn Track(comptime T: type) type {
             self.* = undefined;
         }
         pub fn sampleAt(self: Self, ratio_in: f32) T {
-            std.debug.assert(self.keys.len > 0);
+            // Ozz runtime tracks are valid in their default/empty state and
+            // sampling them returns the policy identity value.
+            if (self.keys.len == 0) return trackIdentity(T);
             const ratio = std.math.clamp(ratio_in, 0, 1);
             if (ratio <= self.keys[0].ratio) return self.keys[0].value;
             if (ratio >= self.keys[self.keys.len - 1].ratio) return self.keys[self.keys.len - 1].value;
@@ -580,6 +608,11 @@ pub fn Track(comptime T: type) type {
             return interpolate(T, a.value, b.value, t);
         }
     };
+}
+
+fn trackIdentity(comptime T: type) T {
+    if (T == math.Quaternion) return .identity;
+    return std.mem.zeroes(T);
 }
 
 fn interpolate(comptime T: type, a: T, b: T, t: f32) T {
@@ -662,9 +695,13 @@ pub fn aimIk(options: AimOptions) !AimResult {
     const perpendicular_sq = math.Float3.lengthSquared(options.offset) -
         forward_projection * forward_projection;
     const target_sq = math.Float3.lengthSquared(target);
-    if (perpendicular_sq > target_sq or target_sq <= math.epsilon) {
+    if (perpendicular_sq > target_sq) {
         return .{ .correction = .identity, .reached = false };
     }
+    // Ozz reports offset reachability independently from whether the target
+    // direction can be resolved. A target at the joint is therefore reached,
+    // but produces no correction.
+    if (target_sq == 0) return .{ .correction = .identity, .reached = true };
     const intersection = @sqrt(@max(target_sq - perpendicular_sq, 0));
     const offset_forward = math.Float3.add(
         options.offset,
@@ -674,12 +711,16 @@ pub fn aimIk(options: AimOptions) !AimResult {
     const corrected_up = math.Quaternion.rotate(aim_rotation, options.up);
     const pole_local = math.Float4x4.transformVector(inverse, options.pole_vector);
     const axis = math.Float3.normalize(target);
-    const current_normal = math.Float3.normalize(math.Float3.cross(corrected_up, axis));
-    const desired_normal = math.Float3.normalize(math.Float3.cross(pole_local, axis));
+    const current_normal_raw = math.Float3.cross(corrected_up, axis);
+    const desired_normal_raw = math.Float3.cross(pole_local, axis);
+    const current_normal_sq = math.Float3.lengthSquared(current_normal_raw);
+    const desired_normal_sq = math.Float3.lengthSquared(desired_normal_raw);
     var plane_rotation = math.Quaternion.identity;
-    if (math.Float3.lengthSquared(current_normal) > math.epsilon and
-        math.Float3.lengthSquared(desired_normal) > math.epsilon)
-    {
+    if (current_normal_sq != 0 and desired_normal_sq != 0) {
+        // Plane directions are meaningful at any non-zero magnitude. In
+        // particular, ozz deliberately accepts very small up and pole vectors.
+        const current_normal = math.Float3.scale(current_normal_raw, 1 / @sqrt(current_normal_sq));
+        const desired_normal = math.Float3.scale(desired_normal_raw, 1 / @sqrt(desired_normal_sq));
         const cosine = std.math.clamp(math.Float3.dot(current_normal, desired_normal), -1, 1);
         var angle = std.math.acos(cosine);
         if (math.Float3.dot(math.Float3.cross(current_normal, desired_normal), axis) < 0) angle = -angle;
