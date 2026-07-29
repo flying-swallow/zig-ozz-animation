@@ -196,7 +196,7 @@ test "upstream test inventory is pinned and explicitly classified" {
             }
             source_count += 1;
             google_test_count += declarations;
-            status_counts[@backingInt(source.status)] += 1;
+            status_counts[@intFromEnum(source.status)] += 1;
         } else if (std.mem.eql(u8, entry.basename, "CMakeLists.txt")) {
             const bytes = try entry.dir.readFileAlloc(
                 std.testing.io,

@@ -5,215 +5,91 @@ pub const epsilon: f32 = 1e-6;
 
 pub const Vec2f32 = caliper.Vec2f32;
 pub const Vec3f32 = caliper.Vec3f32;
+pub const Vec4f32 = caliper.Vec4f32;
 pub const vec = caliper.vec;
 pub const approx = caliper.approx;
 
-pub const Float4 = extern struct {
-    x: f32 = 0,
-    y: f32 = 0,
-    z: f32 = 0,
-    w: f32 = 0,
+pub const Quat4f32 = caliper.Quat4f32;
 
-    pub const zero: Float4 = .{};
-    pub const one: Float4 = .{ .x = 1, .y = 1, .z = 1, .w = 1 };
+/// Quaternion operations over `Quat4f32` (xyzw order, `@Vector(4, f32)`).
+///
+/// Note that `Quat4f32` and `Vec4f32` are the same Zig type, so a quaternion is not
+/// distinguishable from a 4-vector by type alone. Code that must tell a rotation track from a
+/// float4 track dispatches on `animation.ValueKind`, not on the value type.
+pub const quat = struct {
+    pub const identity: Quat4f32 = .{ 0, 0, 0, 1 };
 
-    pub fn add(a: Float4, b: Float4) Float4 {
-        return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w };
-    }
-    pub fn sub(a: Float4, b: Float4) Float4 {
-        return .{ .x = a.x - b.x, .y = a.y - b.y, .z = a.z - b.z, .w = a.w - b.w };
-    }
-    pub fn mul(a: Float4, b: Float4) Float4 {
-        return .{ .x = a.x * b.x, .y = a.y * b.y, .z = a.z * b.z, .w = a.w * b.w };
-    }
-    pub fn div(a: Float4, b: Float4) Float4 {
-        return .{ .x = a.x / b.x, .y = a.y / b.y, .z = a.z / b.z, .w = a.w / b.w };
-    }
-    pub fn negate(v: Float4) Float4 {
-        return .{ .x = -v.x, .y = -v.y, .z = -v.z, .w = -v.w };
-    }
-    pub fn scale(v: Float4, s: f32) Float4 {
-        return .{ .x = v.x * s, .y = v.y * s, .z = v.z * s, .w = v.w * s };
-    }
-    pub fn dot(a: Float4, b: Float4) f32 {
-        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-    }
-    pub fn lengthSquared(v: Float4) f32 {
-        return dot(v, v);
-    }
-    pub fn length(v: Float4) f32 {
-        return @sqrt(lengthSquared(v));
-    }
-    pub fn normalize(v: Float4) Float4 {
-        const len = length(v);
-        return if (len > epsilon) scale(v, 1 / len) else zero;
-    }
-    pub fn normalizeSafe(v: Float4, fallback: Float4) Float4 {
-        return if (lengthSquared(v) > epsilon) normalize(v) else fallback;
-    }
-    pub fn isNormalized(v: Float4) bool {
-        return @abs(lengthSquared(v) - 1) <= epsilon;
-    }
-    pub fn min(a: Float4, b: Float4) Float4 {
-        return .{ .x = @min(a.x, b.x), .y = @min(a.y, b.y), .z = @min(a.z, b.z), .w = @min(a.w, b.w) };
-    }
-    pub fn max(a: Float4, b: Float4) Float4 {
-        return .{ .x = @max(a.x, b.x), .y = @max(a.y, b.y), .z = @max(a.z, b.z), .w = @max(a.w, b.w) };
-    }
-    pub fn clamp(v: Float4, lower: Float4, upper: Float4) Float4 {
-        return min(max(v, lower), upper);
-    }
-    pub fn approxEq(a: Float4, b: Float4, tolerance: f32) bool {
-        return @abs(a.x - b.x) <= tolerance and @abs(a.y - b.y) <= tolerance and
-            @abs(a.z - b.z) <= tolerance and @abs(a.w - b.w) <= tolerance;
-    }
-    pub fn lerp(a: Float4, b: Float4, t: f32) Float4 {
-        return .{
-            .x = a.x + (b.x - a.x) * t,
-            .y = a.y + (b.y - a.y) * t,
-            .z = a.z + (b.z - a.z) * t,
-            .w = a.w + (b.w - a.w) * t,
-        };
-    }
-};
+    pub const mul = caliper.quat.mul;
+    pub const conjugate = caliper.quat.conjugate;
+    pub const inverse = caliper.quat.inverse;
+    pub const lerp = caliper.quat.lerp;
+    pub const nlerp = caliper.quat.nlerp;
+    pub const slerp = caliper.quat.slerp;
+    pub const normalize = caliper.quat.normalize_default;
+    pub const toAxisAngle = caliper.quat.to_axis_angle;
 
-pub const Quaternion = extern struct {
-    x: f32 = 0,
-    y: f32 = 0,
-    z: f32 = 0,
-    w: f32 = 1,
-
-    pub const identity: Quaternion = .{};
-
-    pub fn dot(a: Quaternion, b: Quaternion) f32 {
-        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    pub fn dot(a: Quat4f32, b: Quat4f32) f32 {
+        return caliper.vec.dot(a, b);
     }
-    pub fn conjugate(q: Quaternion) Quaternion {
-        return .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = q.w };
+    pub fn negate(q: Quat4f32) Quat4f32 {
+        return -q;
     }
-    pub fn negate(q: Quaternion) Quaternion {
-        return .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w };
+    pub fn add(a: Quat4f32, b: Quat4f32) Quat4f32 {
+        return a + b;
     }
-    pub fn add(a: Quaternion, b: Quaternion) Quaternion {
-        return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z, .w = a.w + b.w };
+    pub fn scale(q: Quat4f32, s: f32) Quat4f32 {
+        return q * @as(Quat4f32, @splat(s));
     }
-    pub fn scale(q: Quaternion, s: f32) Quaternion {
-        return .{ .x = q.x * s, .y = q.y * s, .z = q.z * s, .w = q.w * s };
-    }
-    pub fn isNormalized(q: Quaternion) bool {
-        return @abs(dot(q, q) - 1) <= epsilon;
+    pub fn isNormalized(q: Quat4f32) bool {
+        return caliper.vec.is_normalized_default(q);
     }
     /// Compares rotations, treating q and -q as the same orientation.
-    pub fn approxRotationEq(a: Quaternion, b: Quaternion, cosine_tolerance: f32) bool {
+    pub fn approxRotationEq(a: Quat4f32, b: Quat4f32, cosine_tolerance: f32) bool {
         return @abs(dot(a, b)) >= cosine_tolerance;
     }
-    pub fn normalize(q: Quaternion) Quaternion {
-        const len_sq = dot(q, q);
-        if (len_sq <= epsilon) return identity;
-        const inv = 1 / @sqrt(len_sq);
-        return .{ .x = q.x * inv, .y = q.y * inv, .z = q.z * inv, .w = q.w * inv };
+    pub fn rotate(q: Quat4f32, v: Vec3f32) Vec3f32 {
+        return caliper.quat.rotate_vector(q, v);
     }
-    pub fn mul(a: Quaternion, b: Quaternion) Quaternion {
-        return fromVec(caliper.quat.mul(asVec(a), asVec(b)));
-    }
-    pub fn rotate(q: Quaternion, v: Vec3f32) Vec3f32 {
-        return caliper.quat.rotate_vector(asVec(q), v);
-    }
-    pub fn nlerp(a: Quaternion, b_in: Quaternion, t: f32) Quaternion {
-        var b = b_in;
-        if (dot(a, b) < 0) b = .{ .x = -b.x, .y = -b.y, .z = -b.z, .w = -b.w };
-        return normalize(.{
-            .x = a.x + (b.x - a.x) * t,
-            .y = a.y + (b.y - a.y) * t,
-            .z = a.z + (b.z - a.z) * t,
-            .w = a.w + (b.w - a.w) * t,
-        });
-    }
-    pub fn lerp(a: Quaternion, b: Quaternion, t: f32) Quaternion {
-        return .{
-            .x = a.x + (b.x - a.x) * t,
-            .y = a.y + (b.y - a.y) * t,
-            .z = a.z + (b.z - a.z) * t,
-            .w = a.w + (b.w - a.w) * t,
-        };
-    }
-    pub fn slerp(a: Quaternion, b: Quaternion, t: f32) Quaternion {
-        var cos_angle = std.math.clamp(dot(a, b), -1, 1);
-        if (@abs(cos_angle) > 0.9995) return normalize(lerp(a, b, t));
-        const angle = std.math.acos(cos_angle);
-        const sin_angle = @sin(angle);
-        cos_angle = @sin((1 - t) * angle) / sin_angle;
-        const b_weight = @sin(t * angle) / sin_angle;
-        return add(scale(a, cos_angle), scale(b, b_weight));
-    }
-    pub fn fromAxisAngle(axis_in: Vec3f32, angle: f32) Quaternion {
+    pub fn fromAxisAngle(axis_in: Vec3f32, angle: f32) Quat4f32 {
         const axis_length = vec.norm(axis_in);
         const axis: Vec3f32 = if (axis_length > epsilon)
             vec.scale(axis_in, 1 / axis_length)
         else
             @splat(0);
-        return fromVec(caliper.quat.from_rotation(axis, angle));
+        return caliper.quat.from_rotation(axis, angle);
     }
-    pub fn fromAxisCosAngle(axis: Vec3f32, cosine: f32) Quaternion {
+    pub fn fromAxisCosAngle(axis: Vec3f32, cosine: f32) Quat4f32 {
         return fromAxisAngle(axis, std.math.acos(std.math.clamp(cosine, -1, 1)));
     }
 
     /// Builds a quaternion from intrinsic XYZ Euler rotations.
-    pub fn fromEuler(euler: Vec3f32) Quaternion {
-        const hx = euler[0] * 0.5;
-        const hy = euler[1] * 0.5;
-        const hz = euler[2] * 0.5;
-        const sx = @sin(hx);
-        const cx = @cos(hx);
-        const sy = @sin(hy);
-        const cy = @cos(hy);
-        const sz = @sin(hz);
-        const cz = @cos(hz);
-        return normalize(.{
-            .x = sx * cy * cz + cx * sy * sz,
-            .y = cx * sy * cz - sx * cy * sz,
-            .z = cx * cy * sz + sx * sy * cz,
-            .w = cx * cy * cz - sx * sy * sz,
-        });
+    ///
+    /// Caliper also ships `from_eular_angles`, which composes in the opposite order
+    /// (intrinsic ZYX); ozz authors its motion data in intrinsic XYZ, so this must stay the
+    /// `_xyz_intrinsic` variant.
+    pub fn fromEuler(euler: Vec3f32) Quat4f32 {
+        return normalize(caliper.quat.from_euler_xyz_intrinsic(euler));
     }
 
     /// Returns intrinsic XYZ Euler rotations.
-    pub fn toEuler(q_in: Quaternion) Vec3f32 {
-        const q = normalize(q_in);
-        const sin_x = 2 * (q.w * q.x - q.y * q.z);
-        const cos_x = 1 - 2 * (q.x * q.x + q.y * q.y);
-        const sin_y = std.math.clamp(2 * (q.w * q.y + q.z * q.x), -1, 1);
-        const sin_z = 2 * (q.w * q.z - q.x * q.y);
-        const cos_z = 1 - 2 * (q.y * q.y + q.z * q.z);
-        return .{
-            std.math.atan2(sin_x, cos_x),
-            std.math.asin(sin_y),
-            std.math.atan2(sin_z, cos_z),
-        };
+    pub fn toEuler(q: Quat4f32) Vec3f32 {
+        return caliper.quat.to_euler_xyz_intrinsic(normalize(q));
     }
 
-    pub fn asVec(q: Quaternion) caliper.Quat4f32 {
-        return .{ q.x, q.y, q.z, q.w };
-    }
-
-    pub fn fromVec(q: caliper.Quat4f32) Quaternion {
-        return .{ .x = q[0], .y = q[1], .z = q[2], .w = q[3] };
-    }
-
-    pub fn fromTo(from: Vec3f32, to: Vec3f32) Quaternion {
+    pub fn fromTo(from: Vec3f32, to: Vec3f32) Quat4f32 {
         if (vec.norm_sqr(from) <= epsilon or vec.norm_sqr(to) <= epsilon) {
             return identity;
         }
-        return fromVec(caliper.quat.from_to(
+        return caliper.quat.from_to(
             caliper.vec.normalize(from),
             caliper.vec.normalize(to),
-        ));
+        );
     }
 };
 
 pub const Transform = struct {
     translation: Vec3f32 = .{ 0, 0, 0 },
-    rotation: Quaternion = .identity,
+    rotation: Quat4f32 = quat.identity,
     scale: Vec3f32 = .{ 1, 1, 1 },
 
     pub const identity: Transform = .{};
@@ -221,38 +97,37 @@ pub const Transform = struct {
     pub fn combine(parent: Transform, local: Transform) Transform {
         const scaled = vec.mul(parent.scale, local.translation);
         return .{
-            .translation = vec.add(parent.translation, Quaternion.rotate(parent.rotation, scaled)),
-            .rotation = Quaternion.normalize(Quaternion.mul(parent.rotation, local.rotation)),
+            .translation = vec.add(parent.translation, quat.rotate(parent.rotation, scaled)),
+            .rotation = quat.normalize(quat.mul(parent.rotation, local.rotation)),
             .scale = vec.mul(parent.scale, local.scale),
         };
     }
     pub fn lerp(a: Transform, b: Transform, t: f32) Transform {
         return .{
             .translation = approx.lerp_exact(a.translation, b.translation, t),
-            .rotation = Quaternion.nlerp(a.rotation, b.rotation, t),
+            .rotation = quat.nlerp(a.rotation, b.rotation, t),
             .scale = approx.lerp_exact(a.scale, b.scale, t),
         };
     }
 };
 
-pub const SimdFloat4 = @Vector(4, f32);
 pub const SimdInt4 = @Vector(4, i32);
 
-pub fn lane(v: SimdFloat4, index: usize) f32 {
+pub fn lane(v: Vec4f32, index: usize) f32 {
     const values: [4]f32 = @bitCast(v);
     return values[index];
 }
 
-pub fn setLane(v: *SimdFloat4, index: usize, value: f32) void {
+pub fn setLane(v: *Vec4f32, index: usize, value: f32) void {
     var values: [4]f32 = @bitCast(v.*);
     values[index] = value;
     v.* = @bitCast(values);
 }
 
 pub const SoaFloat3 = struct {
-    x: SimdFloat4,
-    y: SimdFloat4,
-    z: SimdFloat4,
+    x: Vec4f32,
+    y: Vec4f32,
+    z: Vec4f32,
 
     pub fn splat(v: Vec3f32) SoaFloat3 {
         return .{
@@ -264,13 +139,13 @@ pub const SoaFloat3 = struct {
 };
 
 pub const SoaQuaternion = struct {
-    x: SimdFloat4,
-    y: SimdFloat4,
-    z: SimdFloat4,
-    w: SimdFloat4,
+    x: Vec4f32,
+    y: Vec4f32,
+    z: Vec4f32,
+    w: Vec4f32,
 
-    pub fn splat(v: Quaternion) SoaQuaternion {
-        return .{ .x = @splat(v.x), .y = @splat(v.y), .z = @splat(v.z), .w = @splat(v.w) };
+    pub fn splat(v: Quat4f32) SoaQuaternion {
+        return .{ .x = @splat(v[0]), .y = @splat(v[1]), .z = @splat(v[2]), .w = @splat(v[3]) };
     }
 };
 
@@ -281,7 +156,7 @@ pub const SoaTransform = struct {
 
     pub const identity: SoaTransform = .{
         .translation = SoaFloat3.splat(.{ 0, 0, 0 }),
-        .rotation = SoaQuaternion.splat(.identity),
+        .rotation = SoaQuaternion.splat(quat.identity),
         .scale = SoaFloat3.splat(.{ 1, 1, 1 }),
     };
 };
@@ -296,10 +171,10 @@ pub fn aosToSoa(input: []const Transform, output: []SoaTransform) void {
             setLane(&soa.translation.x, lane_index, t.translation[0]);
             setLane(&soa.translation.y, lane_index, t.translation[1]);
             setLane(&soa.translation.z, lane_index, t.translation[2]);
-            setLane(&soa.rotation.x, lane_index, t.rotation.x);
-            setLane(&soa.rotation.y, lane_index, t.rotation.y);
-            setLane(&soa.rotation.z, lane_index, t.rotation.z);
-            setLane(&soa.rotation.w, lane_index, t.rotation.w);
+            setLane(&soa.rotation.x, lane_index, t.rotation[0]);
+            setLane(&soa.rotation.y, lane_index, t.rotation[1]);
+            setLane(&soa.rotation.z, lane_index, t.rotation[2]);
+            setLane(&soa.rotation.w, lane_index, t.rotation[3]);
             setLane(&soa.scale.x, lane_index, t.scale[0]);
             setLane(&soa.scale.y, lane_index, t.scale[1]);
             setLane(&soa.scale.z, lane_index, t.scale[2]);
@@ -315,10 +190,10 @@ pub fn soaLane(input: SoaTransform, index: usize) Transform {
             lane(input.translation.z, index),
         },
         .rotation = .{
-            .x = lane(input.rotation.x, index),
-            .y = lane(input.rotation.y, index),
-            .z = lane(input.rotation.z, index),
-            .w = lane(input.rotation.w, index),
+            lane(input.rotation.x, index),
+            lane(input.rotation.y, index),
+            lane(input.rotation.z, index),
+            lane(input.rotation.w, index),
         },
         .scale = .{
             lane(input.scale.x, index),
@@ -332,10 +207,10 @@ pub fn setSoaLane(output: *SoaTransform, index: usize, t: Transform) void {
     setLane(&output.translation.x, index, t.translation[0]);
     setLane(&output.translation.y, index, t.translation[1]);
     setLane(&output.translation.z, index, t.translation[2]);
-    setLane(&output.rotation.x, index, t.rotation.x);
-    setLane(&output.rotation.y, index, t.rotation.y);
-    setLane(&output.rotation.z, index, t.rotation.z);
-    setLane(&output.rotation.w, index, t.rotation.w);
+    setLane(&output.rotation.x, index, t.rotation[0]);
+    setLane(&output.rotation.y, index, t.rotation[1]);
+    setLane(&output.rotation.z, index, t.rotation[2]);
+    setLane(&output.rotation.w, index, t.rotation[3]);
     setLane(&output.scale.x, index, t.scale[0]);
     setLane(&output.scale.y, index, t.scale[1]);
     setLane(&output.scale.z, index, t.scale[2]);
@@ -352,16 +227,16 @@ pub const Float4x4 = extern struct {
     } };
 
     pub fn fromTransform(t: Transform) Float4x4 {
-        const q = Quaternion.normalize(t.rotation);
-        const xx = q.x * q.x;
-        const yy = q.y * q.y;
-        const zz = q.z * q.z;
-        const xy = q.x * q.y;
-        const xz = q.x * q.z;
-        const yz = q.y * q.z;
-        const wx = q.w * q.x;
-        const wy = q.w * q.y;
-        const wz = q.w * q.z;
+        const q = quat.normalize(t.rotation);
+        const xx = q[0] * q[0];
+        const yy = q[1] * q[1];
+        const zz = q[2] * q[2];
+        const xy = q[0] * q[1];
+        const xz = q[0] * q[2];
+        const yz = q[1] * q[2];
+        const wx = q[3] * q[0];
+        const wy = q[3] * q[1];
+        const wz = q[3] * q[2];
         return .{ .cols = .{
             .{ (1 - 2 * (yy + zz)) * t.scale[0], (2 * (xy + wz)) * t.scale[0], (2 * (xz - wy)) * t.scale[0], 0 },
             .{ (2 * (xy - wz)) * t.scale[1], (1 - 2 * (xx + zz)) * t.scale[1], (2 * (yz + wx)) * t.scale[1], 0 },
@@ -482,7 +357,7 @@ pub const RectFloat = Rect(f32);
 test "transform composition and soa transpose" {
     const parent: Transform = .{
         .translation = .{ 1, 2, 3 },
-        .rotation = Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi / 2.0)),
+        .rotation = quat.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi / 2.0)),
     };
     const child: Transform = .{ .translation = .{ 1, 0, 0 } };
     const combined = Transform.combine(parent, child);

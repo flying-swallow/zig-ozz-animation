@@ -238,23 +238,23 @@ fn decompose(m: [16]f32) math.Transform {
     const r21 = if (sy != 0) m[6] / sy else 0;
     const r22 = if (sz != 0) m[10] / sz else 1;
     const trace = r00 + r11 + r22;
-    var q: math.Quaternion = undefined;
+    var q: math.Quat4f32 = undefined;
     if (trace > 0) {
         const root = @sqrt(trace + 1) * 2;
-        q = .{ .x = (r21 - r12) / root, .y = (r02 - r20) / root, .z = (r10 - r01) / root, .w = root * 0.25 };
+        q = .{ (r21 - r12) / root, (r02 - r20) / root, (r10 - r01) / root, root * 0.25 };
     } else if (r00 > r11 and r00 > r22) {
         const root = @sqrt(1 + r00 - r11 - r22) * 2;
-        q = .{ .x = root * 0.25, .y = (r01 + r10) / root, .z = (r02 + r20) / root, .w = (r21 - r12) / root };
+        q = .{ root * 0.25, (r01 + r10) / root, (r02 + r20) / root, (r21 - r12) / root };
     } else if (r11 > r22) {
         const root = @sqrt(1 + r11 - r00 - r22) * 2;
-        q = .{ .x = (r01 + r10) / root, .y = root * 0.25, .z = (r12 + r21) / root, .w = (r02 - r20) / root };
+        q = .{ (r01 + r10) / root, root * 0.25, (r12 + r21) / root, (r02 - r20) / root };
     } else {
         const root = @sqrt(1 + r22 - r00 - r11) * 2;
-        q = .{ .x = (r02 + r20) / root, .y = (r12 + r21) / root, .z = root * 0.25, .w = (r10 - r01) / root };
+        q = .{ (r02 + r20) / root, (r12 + r21) / root, root * 0.25, (r10 - r01) / root };
     }
     return .{
         .translation = .{ m[12], m[13], m[14] },
-        .rotation = math.Quaternion.normalize(q),
+        .rotation = math.quat.normalize(q),
         .scale = .{ sx, sy, sz },
     };
 }
@@ -263,11 +263,11 @@ fn localTransform(node: Gltf.Node) math.Transform {
     if (node.matrix) |matrix| return decompose(matrix);
     return .{
         .translation = .{ node.translation[0], node.translation[1], node.translation[2] },
-        .rotation = math.Quaternion.normalize(.{
-            .x = node.rotation[0],
-            .y = node.rotation[1],
-            .z = node.rotation[2],
-            .w = node.rotation[3],
+        .rotation = math.quat.normalize(math.Quat4f32{
+            node.rotation[0],
+            node.rotation[1],
+            node.rotation[2],
+            node.rotation[3],
         }),
         .scale = .{ node.scale[0], node.scale[1], node.scale[2] },
     };
@@ -531,33 +531,23 @@ fn readChannelValue(
         try readAccessor(data, buffers, accessor_index, index, &value);
         return .{ value[0], value[1], value[2] };
     }
-    if (T == math.Quaternion) {
+    if (T == math.Quat4f32) {
         var value: [4]f32 = undefined;
         try readAccessor(data, buffers, accessor_index, index, &value);
-        return .{ .x = value[0], .y = value[1], .z = value[2], .w = value[3] };
+        return .{ value[0], value[1], value[2], value[3] };
     }
     @compileError("unsupported glTF animation channel type");
 }
 
 fn addValue(comptime T: type, a: T, b: T) T {
     if (T == math.Vec3f32) return math.vec.add(a, b);
-    if (T == math.Quaternion) return .{
-        .x = a.x + b.x,
-        .y = a.y + b.y,
-        .z = a.z + b.z,
-        .w = a.w + b.w,
-    };
+    if (T == math.Quat4f32) return a + b;
     @compileError("unsupported glTF animation channel type");
 }
 
 fn scaleValue(comptime T: type, value: T, scale: f32) T {
     if (T == math.Vec3f32) return math.vec.scale(value, scale);
-    if (T == math.Quaternion) return .{
-        .x = value.x * scale,
-        .y = value.y * scale,
-        .z = value.z * scale,
-        .w = value.w * scale,
-    };
+    if (T == math.Quat4f32) return value * @as(math.Quat4f32, @splat(scale));
     @compileError("unsupported glTF animation channel type");
 }
 
@@ -729,7 +719,7 @@ pub fn importAnimationsFileWithOptions(
                 .rotation => {
                     if (clip.tracks[joint].rotations.len != 0) return Error.InvalidAnimation;
                     clip.tracks[joint].rotations = try sampleChannel(
-                        math.Quaternion,
+                        math.Quat4f32,
                         offline.RotationKey,
                         allocator,
                         data,
@@ -738,7 +728,7 @@ pub fn importAnimationsFileWithOptions(
                         sampling_rate,
                     );
                     for (clip.tracks[joint].rotations) |*key| {
-                        key.value = math.Quaternion.normalize(key.value);
+                        key.value = math.quat.normalize(key.value);
                     }
                 },
                 .scale => {

@@ -127,7 +127,7 @@ pub const Sample = struct {
 
             gui.doLabel("Select joint:", .{});
             _ = gui.doSliderInt(
-                fw.im.formatZ(&buffer, "{s} ({d})", .{
+                fw.im.formatZ(&buffer, "{s} ({d})###attachment", .{
                     self.jointName(self.attachment),
                     self.attachment,
                 }),
@@ -149,7 +149,7 @@ pub const Sample = struct {
             var offset: [3]f32 = self.offset;
             inline for (.{ "x", "y", "z" }, 0..) |axis, index| {
                 _ = gui.doSlider(
-                    fw.im.formatZ(&buffer, axis ++ ": {d:.2}", .{offset[index]}),
+                    fw.im.formatZ(&buffer, axis ++ ": {d:.2}###offset_" ++ axis, .{offset[index]}),
                     -1,
                     1,
                     &offset[index],

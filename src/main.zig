@@ -264,11 +264,11 @@ fn migrateOne(
             defer value.deinit();
             try ozz.io.writeSkeleton(allocator, writer, value);
         },
-        .float_track => return migrateTrack(f32, allocator, bytes, writer),
-        .float2_track => return migrateTrack(ozz.math.Vec2f32, allocator, bytes, writer),
-        .float3_track => return migrateTrack(ozz.math.Vec3f32, allocator, bytes, writer),
-        .float4_track => return migrateTrack(ozz.math.Float4, allocator, bytes, writer),
-        .quaternion_track => return migrateTrack(ozz.math.Quaternion, allocator, bytes, writer),
+        .float_track => return migrateTrack(.float, allocator, bytes, writer),
+        .float2_track => return migrateTrack(.float2, allocator, bytes, writer),
+        .float3_track => return migrateTrack(.float3, allocator, bytes, writer),
+        .float4_track => return migrateTrack(.float4, allocator, bytes, writer),
+        .quaternion_track => return migrateTrack(.quaternion, allocator, bytes, writer),
         .raw_skeleton => {
             var value = try ozz.legacy.readRawSkeleton(allocator, &reader, .{});
             defer value.deinit();
@@ -279,11 +279,11 @@ fn migrateOne(
             defer value.deinit();
             try ozz.io.writeRawAnimation(allocator, writer, value);
         },
-        .raw_float_track => try migrateRawTrack(f32, allocator, bytes, writer),
-        .raw_float2_track => try migrateRawTrack(ozz.math.Vec2f32, allocator, bytes, writer),
-        .raw_float3_track => try migrateRawTrack(ozz.math.Vec3f32, allocator, bytes, writer),
-        .raw_float4_track => try migrateRawTrack(ozz.math.Float4, allocator, bytes, writer),
-        .raw_quaternion_track => try migrateRawTrack(ozz.math.Quaternion, allocator, bytes, writer),
+        .raw_float_track => try migrateRawTrack(.float, allocator, bytes, writer),
+        .raw_float2_track => try migrateRawTrack(.float2, allocator, bytes, writer),
+        .raw_float3_track => try migrateRawTrack(.float3, allocator, bytes, writer),
+        .raw_float4_track => try migrateRawTrack(.float4, allocator, bytes, writer),
+        .raw_quaternion_track => try migrateRawTrack(.quaternion, allocator, bytes, writer),
         .animation => {
             var value = try ozz.legacy.readAnimation(allocator, &reader, .{});
             defer value.deinit();
@@ -315,29 +315,29 @@ fn migrateOne(
 }
 
 fn migrateTrack(
-    comptime T: type,
+    comptime kind: ozz.animation.ValueKind,
     allocator: std.mem.Allocator,
     bytes: []const u8,
     writer: *std.Io.Writer,
 ) !usize {
     var consumed: usize = 0;
     var reader = std.Io.Reader.fixed(bytes);
-    var value = try ozz.legacy.readTrackPrefix(T, allocator, &reader, .{}, &consumed);
+    var value = try ozz.legacy.readTrackPrefix(kind, allocator, &reader, .{}, &consumed);
     defer value.deinit();
-    try ozz.io.writeTrack(T, allocator, writer, value);
+    try ozz.io.writeTrack(kind, allocator, writer, value);
     return consumed;
 }
 
 fn migrateRawTrack(
-    comptime T: type,
+    comptime kind: ozz.animation.ValueKind,
     allocator: std.mem.Allocator,
     bytes: []const u8,
     writer: *std.Io.Writer,
 ) !void {
     var reader = std.Io.Reader.fixed(bytes);
-    var value = try ozz.legacy.readRawTrack(T, allocator, &reader, .{});
+    var value = try ozz.legacy.readRawTrack(kind, allocator, &reader, .{});
     defer value.deinit();
-    try ozz.io.writeRawTrack(T, allocator, writer, value);
+    try ozz.io.writeRawTrack(kind, allocator, writer, value);
 }
 
 test "usage has the unified commands" {

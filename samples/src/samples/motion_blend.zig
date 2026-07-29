@@ -14,7 +14,8 @@ const ozz = @import("zig_ozz_animation");
 const fw = @import("framework");
 
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Vec3f32 = ozz.math.Vec3f32;
 const vec = ozz.math.vec;
 
@@ -176,7 +177,7 @@ pub const Sample = struct {
                 layer.motion_track,
                 layer.controller.time_ratio,
                 loops,
-                .identity,
+                quat.identity,
             );
 
             // Sampling however can be skipped for an irrelevant layer.
@@ -258,7 +259,7 @@ pub const Sample = struct {
             }
 
             _ = gui.doSlider(
-                label(&buffer, "Blend ratio: {d:.2}", .{self.blend_ratio}),
+                label(&buffer, "Blend ratio: {d:.2}###blend_ratio", .{self.blend_ratio}),
                 0,
                 1,
                 &self.blend_ratio,
@@ -268,7 +269,7 @@ pub const Sample = struct {
 
             for (&self.layers, 0..) |*layer, index| {
                 _ = gui.doSlider(
-                    label(&buffer, "Weight {d}: {d:.2}", .{ index, layer.weight }),
+                    label(&buffer, "Weight {0d}: {1d:.2}###weight{0d}", .{ index, layer.weight }),
                     0,
                     1,
                     &layer.weight,
@@ -284,8 +285,12 @@ pub const Sample = struct {
                 "Animation 2",
                 "Animation 3",
             };
-            for (&self.layers, titles) |*layer, title| {
+            for (&self.layers, titles, 0..) |*layer, title, index| {
                 if (gui.openClose(title, true)) {
+                    // Each controller draws the same widgets, so it gets its own
+                    // scope in the id stack.
+                    gui.pushId(index);
+                    defer gui.popId();
                     // Only reachable in manual mode: the automatic mode owns
                     // both the weights and the playback speeds.
                     layer.controller.onGui(gui, layer.clip.duration(), self.manual, true);
@@ -295,7 +300,7 @@ pub const Sample = struct {
 
         if (gui.openClose("Motion control", true)) {
             _ = gui.doSlider(
-                label(&buffer, "Angular vel: {d:.0} deg/s", .{
+                label(&buffer, "Angular vel: {d:.0} deg/s###angular_velocity", .{
                     self.angular_velocity * 180 / std.math.pi,
                 }),
                 -half_pi,
@@ -349,10 +354,10 @@ pub const Sample = struct {
     }
 
     /// Rotation to apply for `duration` seconds of steering.
-    fn frameRotation(self: Sample, duration: f32) Quaternion {
+    fn frameRotation(self: Sample, duration: f32) Quat4f32 {
         // Upstream spells this `Quaternion::FromEuler({angle, 0, 0})`, whose
         // first component is the yaw; here that is an explicit rotation about Y.
-        return Quaternion.fromAxisAngle(.{ 0, 1, 0 }, self.angular_velocity * duration);
+        return quat.fromAxisAngle(.{ 0, 1, 0 }, self.angular_velocity * duration);
     }
 };
 

@@ -93,32 +93,24 @@ fn readFloat3(reader: *std.Io.Reader) !math.Vec3f32 {
     return serialization.readVec3f32(reader, .little);
 }
 
-fn writeXyzw(writer: *std.Io.Writer, value: anytype) !void {
-    try writeF32(writer, value.x);
-    try writeF32(writer, value.y);
-    try writeF32(writer, value.z);
-    try writeF32(writer, value.w);
+fn writeFloat4(writer: *std.Io.Writer, value: math.Vec4f32) !void {
+    try serialization.writeVec4f32(writer, value, .little);
 }
 
-fn readXyzw(comptime T: type, reader: *std.Io.Reader) !T {
-    return .{
-        .x = try readF32(reader),
-        .y = try readF32(reader),
-        .z = try readF32(reader),
-        .w = try readF32(reader),
-    };
+fn readFloat4(reader: *std.Io.Reader) !math.Vec4f32 {
+    return serialization.readVec4f32(reader, .little);
 }
 
 fn writeTransform(writer: *std.Io.Writer, value: math.Transform) !void {
     try writeFloat3(writer, value.translation);
-    try writeXyzw(writer, value.rotation);
+    try writeFloat4(writer, value.rotation);
     try writeFloat3(writer, value.scale);
 }
 
 fn readTransform(reader: *std.Io.Reader) !math.Transform {
     return .{
         .translation = try readFloat3(reader),
-        .rotation = try readXyzw(math.Quaternion, reader),
+        .rotation = try readFloat4(reader),
         .scale = try readFloat3(reader),
     };
 }
@@ -232,7 +224,7 @@ fn writeQuaternionKeys(writer: *std.Io.Writer, keys: []const animation.Quaternio
     try writer.writeInt(u32, @intCast(keys.len), .little);
     for (keys) |key| {
         try writeF32(writer, key.ratio);
-        try writeXyzw(writer, key.value);
+        try writeFloat4(writer, key.value);
     }
 }
 
@@ -278,7 +270,7 @@ fn readQuaternionKeys(
     const keys = try allocator.alloc(animation.QuaternionKey, count);
     errdefer allocator.free(keys);
     for (keys) |*key| {
-        key.* = .{ .ratio = try readF32(reader), .value = try readXyzw(math.Quaternion, reader) };
+        key.* = .{ .ratio = try readF32(reader), .value = try readFloat4(reader) };
     }
     return keys;
 }
@@ -331,40 +323,43 @@ pub fn readAnimation(
     return animation.Animation.init(allocator, name, duration, inputs);
 }
 
-fn trackKind(comptime T: type, raw: bool) ObjectKind {
-    if (T == f32) return if (raw) .raw_float_track else .float_track;
-    if (T == math.Vec2f32) return if (raw) .raw_float2_track else .float2_track;
-    if (T == math.Vec3f32) return if (raw) .raw_float3_track else .float3_track;
-    if (T == math.Float4) return if (raw) .raw_float4_track else .float4_track;
-    if (T == math.Quaternion) return if (raw) .raw_quaternion_track else .quaternion_track;
-    @compileError("unsupported track value type");
+fn trackKind(comptime kind: animation.ValueKind, raw: bool) ObjectKind {
+    return switch (kind) {
+        .float => if (raw) .raw_float_track else .float_track,
+        .float2 => if (raw) .raw_float2_track else .float2_track,
+        .float3 => if (raw) .raw_float3_track else .float3_track,
+        .float4 => if (raw) .raw_float4_track else .float4_track,
+        .quaternion => if (raw) .raw_quaternion_track else .quaternion_track,
+    };
 }
 
-fn writeValue(comptime T: type, writer: *std.Io.Writer, value: T) !void {
-    if (T == f32) return writeF32(writer, value);
-    if (T == math.Vec2f32) return serialization.writeVec2f32(writer, value, .little);
-    if (T == math.Vec3f32) return writeFloat3(writer, value);
-    if (T == math.Float4) {
-        try writeXyzw(writer, value);
-        return;
-    }
-    if (T == math.Quaternion) return writeXyzw(writer, value);
-    @compileError("unsupported track value type");
+fn writeValue(
+    comptime kind: animation.ValueKind,
+    writer: *std.Io.Writer,
+    value: kind.Value(),
+) !void {
+    return switch (kind) {
+        .float => writeF32(writer, value),
+        .float2 => serialization.writeVec2f32(writer, value, .little),
+        .float3 => writeFloat3(writer, value),
+        .float4, .quaternion => writeFloat4(writer, value),
+    };
 }
 
-fn readValue(comptime T: type, reader: *std.Io.Reader) !T {
-    if (T == f32) return readF32(reader);
-    if (T == math.Vec2f32) return serialization.readVec2f32(reader, .little);
-    if (T == math.Vec3f32) return readFloat3(reader);
-    if (T == math.Float4 or T == math.Quaternion) return readXyzw(T, reader);
-    @compileError("unsupported track value type");
+fn readValue(comptime kind: animation.ValueKind, reader: *std.Io.Reader) !kind.Value() {
+    return switch (kind) {
+        .float => readF32(reader),
+        .float2 => serialization.readVec2f32(reader, .little),
+        .float3 => readFloat3(reader),
+        .float4, .quaternion => readFloat4(reader),
+    };
 }
 
 pub fn writeTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
-    track: animation.Track(T),
+    track: animation.Track(kind),
 ) !void {
     var payload: std.Io.Writer.Allocating = .init(allocator);
     defer payload.deinit();
@@ -374,42 +369,42 @@ pub fn writeTrack(
     for (track.keys) |key| {
         try payload.writer.writeByte(@intFromEnum(key.interpolation));
         try writeF32(&payload.writer, key.ratio);
-        try writeValue(T, &payload.writer, key.value);
+        try writeValue(kind, &payload.writer, key.value);
     }
-    try finishPayload(allocator, writer, trackKind(T, false), 1, &payload);
+    try finishPayload(allocator, writer, trackKind(kind, false), 1, &payload);
 }
 
 pub fn readTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     limits: ReadLimits,
-) !animation.Track(T) {
-    const bytes = try readPayload(allocator, reader, trackKind(T, false), 1, limits);
+) !animation.Track(kind) {
+    const bytes = try readPayload(allocator, reader, trackKind(kind, false), 1, limits);
     defer allocator.free(bytes);
     var payload = std.Io.Reader.fixed(bytes);
     const name = try readString(allocator, &payload, limits);
     defer allocator.free(name);
     const count = try payload.takeInt(u32, .little);
     if (count > limits.max_collection_items) return Error.InvalidLength;
-    const Key = animation.Track(T).Key;
+    const Key = animation.Track(kind).Key;
     const keys = try allocator.alloc(Key, count);
     defer allocator.free(keys);
     for (keys) |*key| key.* = .{
         .interpolation = std.enums.fromInt(animation.Interpolation, try payload.takeByte()) orelse
             return Error.InvalidLength,
         .ratio = try readF32(&payload),
-        .value = try readValue(T, &payload),
+        .value = try readValue(kind, &payload),
     };
     if (payload.bufferedLen() != 0) return Error.TrailingPayloadData;
-    return animation.Track(T).initMixed(allocator, name, keys);
+    return animation.Track(kind).initMixed(allocator, name, keys);
 }
 
 pub fn writeRawTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     writer: *std.Io.Writer,
-    track: offline.RawTrack(T),
+    track: offline.RawTrack(kind),
 ) !void {
     var payload: std.Io.Writer.Allocating = .init(allocator);
     defer payload.deinit();
@@ -419,35 +414,35 @@ pub fn writeRawTrack(
     for (track.keys) |key| {
         try payload.writer.writeByte(@intFromEnum(key.interpolation));
         try writeF32(&payload.writer, key.ratio);
-        try writeValue(T, &payload.writer, key.value);
+        try writeValue(kind, &payload.writer, key.value);
     }
-    try finishPayload(allocator, writer, trackKind(T, true), 1, &payload);
+    try finishPayload(allocator, writer, trackKind(kind, true), 1, &payload);
 }
 
 pub fn readRawTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
     limits: ReadLimits,
-) !offline.RawTrack(T) {
-    const bytes = try readPayload(allocator, reader, trackKind(T, true), 1, limits);
+) !offline.RawTrack(kind) {
+    const bytes = try readPayload(allocator, reader, trackKind(kind, true), 1, limits);
     defer allocator.free(bytes);
     var payload = std.Io.Reader.fixed(bytes);
     const name = try readString(allocator, &payload, limits);
     defer allocator.free(name);
     const count = try payload.takeInt(u32, .little);
     if (count > limits.max_collection_items) return Error.InvalidLength;
-    const Key = offline.RawTrack(T).Key;
+    const Key = offline.RawTrack(kind).Key;
     const keys = try allocator.alloc(Key, count);
     defer allocator.free(keys);
     for (keys) |*key| key.* = .{
         .interpolation = std.enums.fromInt(animation.Interpolation, try payload.takeByte()) orelse
             return Error.InvalidLength,
         .ratio = try readF32(&payload),
-        .value = try readValue(T, &payload),
+        .value = try readValue(kind, &payload),
     };
     if (payload.bufferedLen() != 0) return Error.TrailingPayloadData;
-    return offline.RawTrack(T).init(allocator, name, keys);
+    return offline.RawTrack(kind).init(allocator, name, keys);
 }
 
 fn writeSlice(
@@ -596,7 +591,7 @@ fn writeTimedQuaternion(writer: *std.Io.Writer, keys: []const offline.RotationKe
     try writer.writeInt(u32, @intCast(keys.len), .little);
     for (keys) |key| {
         try writeF32(writer, key.time);
-        try writeXyzw(writer, key.value);
+        try writeFloat4(writer, key.value);
     }
 }
 
@@ -643,7 +638,7 @@ fn readTimedQuaternion(
     const keys = try allocator.alloc(offline.RotationKey, count);
     errdefer allocator.free(keys);
     for (keys) |*key| {
-        key.* = .{ .time = try readF32(reader), .value = try readXyzw(math.Quaternion, reader) };
+        key.* = .{ .time = try readF32(reader), .value = try readFloat4(reader) };
     }
     return keys;
 }
@@ -749,6 +744,24 @@ pub fn readRawSkeleton(
     return .{ .allocator = allocator, .roots = roots };
 }
 
+test "four-lane track values encode as four little-endian f32" {
+    var bytes: [16]u8 = undefined;
+    const expected = [_]u8{
+        0x00, 0x00, 0x80, 0x3f,
+        0x00, 0x00, 0x00, 0xc0,
+        0x00, 0x00, 0x00, 0x3f,
+        0x00, 0x00, 0x00, 0x00,
+    };
+
+    var float4_writer = std.Io.Writer.fixed(&bytes);
+    try writeValue(.float4, &float4_writer, .{ 1, -2, 0.5, 0 });
+    try std.testing.expectEqualSlices(u8, &expected, float4_writer.buffered());
+
+    var quaternion_writer = std.Io.Writer.fixed(&bytes);
+    try writeValue(.quaternion, &quaternion_writer, .{ 1, -2, 0.5, 0 });
+    try std.testing.expectEqualSlices(u8, &expected, quaternion_writer.buffered());
+}
+
 test "native header round trip" {
     var bytes: [64]u8 = undefined;
     var writer = std.Io.Writer.fixed(&bytes);
@@ -800,9 +813,9 @@ test "native skeleton and animation round trip" {
     defer track.deinit();
     var track_bytes: std.Io.Writer.Allocating = .init(allocator);
     defer track_bytes.deinit();
-    try writeTrack(math.Vec3f32, allocator, &track_bytes.writer, track);
+    try writeTrack(.float3, allocator, &track_bytes.writer, track);
     var track_reader = std.Io.Reader.fixed(track_bytes.writer.buffered());
-    var loaded_track = try readTrack(math.Vec3f32, allocator, &track_reader, .{});
+    var loaded_track = try readTrack(.float3, allocator, &track_reader, .{});
     defer loaded_track.deinit();
     try std.testing.expectEqualStrings("position", loaded_track.name);
     try std.testing.expectEqual(animation.Interpolation.step, loaded_track.keys[1].interpolation);
@@ -815,9 +828,9 @@ test "native skeleton and animation round trip" {
     defer raw_track.deinit();
     var raw_track_bytes: std.Io.Writer.Allocating = .init(allocator);
     defer raw_track_bytes.deinit();
-    try writeRawTrack(f32, allocator, &raw_track_bytes.writer, raw_track);
+    try writeRawTrack(.float, allocator, &raw_track_bytes.writer, raw_track);
     var raw_track_reader = std.Io.Reader.fixed(raw_track_bytes.writer.buffered());
-    var loaded_raw_track = try readRawTrack(f32, allocator, &raw_track_reader, .{});
+    var loaded_raw_track = try readRawTrack(.float, allocator, &raw_track_reader, .{});
     defer loaded_raw_track.deinit();
     try std.testing.expectEqual(animation.Interpolation.step, loaded_raw_track.keys[1].interpolation);
 

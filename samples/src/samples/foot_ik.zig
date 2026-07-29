@@ -30,7 +30,8 @@ const fw = @import("framework");
 
 const Vec3f32 = ozz.math.Vec3f32;
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const vec = ozz.math.vec;
 
 pub const name = "foot_ik";
@@ -313,7 +314,7 @@ pub const Sample = struct {
 
         if (gui.openClose("IK settings", true)) {
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Foot height {d:.2}", .{self.foot_height}),
+                fw.im.formatZ(&buffer, "Foot height {d:.2}###foot_height", .{self.foot_height}),
                 0,
                 0.3,
                 &self.foot_height,
@@ -321,7 +322,7 @@ pub const Sample = struct {
                 true,
             );
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Weight {d:.2}", .{self.weight}),
+                fw.im.formatZ(&buffer, "Weight {d:.2}###weight", .{self.weight}),
                 0,
                 1,
                 &self.weight,
@@ -329,7 +330,7 @@ pub const Sample = struct {
                 true,
             );
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Soften {d:.2}", .{self.soften}),
+                fw.im.formatZ(&buffer, "Soften {d:.2}###soften", .{self.soften}),
                 0,
                 1,
                 &self.soften,
@@ -344,7 +345,7 @@ pub const Sample = struct {
 
             gui.doLabel("Translation", .{});
             moved = gui.doSlider(
-                fw.im.formatZ(&buffer, "x {d:.2}", .{translation[0]}),
+                fw.im.formatZ(&buffer, "x {d:.2}###root_x", .{translation[0]}),
                 -10,
                 10,
                 &translation[0],
@@ -354,7 +355,7 @@ pub const Sample = struct {
             // The vertical position is driven by the floor raycast unless the
             // automatic height is switched off.
             moved = gui.doSlider(
-                fw.im.formatZ(&buffer, "y {d:.2}", .{translation[1]}),
+                fw.im.formatZ(&buffer, "y {d:.2}###root_y", .{translation[1]}),
                 0,
                 5,
                 &translation[1],
@@ -362,7 +363,7 @@ pub const Sample = struct {
                 !self.auto_character_height,
             ) or moved;
             moved = gui.doSlider(
-                fw.im.formatZ(&buffer, "z {d:.2}", .{translation[2]}),
+                fw.im.formatZ(&buffer, "z {d:.2}###root_z", .{translation[2]}),
                 -10,
                 10,
                 &translation[2],
@@ -373,7 +374,7 @@ pub const Sample = struct {
 
             gui.doLabel("Rotation", .{});
             moved = gui.doSlider(
-                fw.im.formatZ(&buffer, "yaw {d:.0}", .{self.root_yaw * radian_to_degree}),
+                fw.im.formatZ(&buffer, "yaw {d:.0}###root_yaw", .{self.root_yaw * radian_to_degree}),
                 -std.math.pi,
                 std.math.pi,
                 &self.root_yaw,
@@ -421,7 +422,7 @@ pub const Sample = struct {
     fn rootTransform(self: Sample) Float4x4 {
         return Float4x4.fromTransform(.{
             .translation = self.root_translation,
-            .rotation = Quaternion.fromEuler(.{ 0, self.root_yaw, 0 }),
+            .rotation = quat.fromEuler(.{ 0, self.root_yaw, 0 }),
         });
     }
 
@@ -430,7 +431,7 @@ pub const Sample = struct {
         if (!self.pelvis_correction) return self.rootTransform();
         return Float4x4.fromTransform(.{
             .translation = vec.add(self.pelvis_offset, self.root_translation),
-            .rotation = Quaternion.fromEuler(.{ 0, self.root_yaw, 0 }),
+            .rotation = quat.fromEuler(.{ 0, self.root_yaw, 0 }),
         });
     }
 

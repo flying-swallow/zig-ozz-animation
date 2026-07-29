@@ -22,7 +22,8 @@ const ozz = @import("zig_ozz_animation");
 const fw = @import("framework");
 
 const Vec3f32 = ozz.math.Vec3f32;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Float4x4 = ozz.math.Float4x4;
 const Transform = ozz.math.Transform;
 const SoaTransform = ozz.math.SoaTransform;
@@ -221,9 +222,9 @@ pub const Sample = struct {
             const rest = ozz.math.soaLane(self.skeleton.rest_poses[group], lane);
             ozz.math.setSoaLane(&self.locals_diff[group], lane, .{
                 .translation = rest.translation + (runtime.translation - raw.translation),
-                .rotation = Quaternion.mul(
+                .rotation = quat.mul(
                     rest.rotation,
-                    Quaternion.mul(runtime.rotation, Quaternion.conjugate(raw.rotation)),
+                    quat.mul(runtime.rotation, quat.conjugate(raw.rotation)),
                 ),
                 .scale = rest.scale * safeDiv(runtime.scale, raw.scale),
             });
@@ -284,7 +285,7 @@ pub const Sample = struct {
                 rebuild;
 
             rebuild = gui.doSlider(
-                fw.im.formatZ(&buffer, "Tolerance: {d:.2} mm", .{self.setting.tolerance * 1000}),
+                fw.im.formatZ(&buffer, "Tolerance: {d:.2} mm###tolerance", .{self.setting.tolerance * 1000}),
                 0,
                 0.1,
                 &self.setting.tolerance,
@@ -293,7 +294,7 @@ pub const Sample = struct {
             ) or rebuild;
 
             rebuild = gui.doSlider(
-                fw.im.formatZ(&buffer, "Distance: {d:.2} mm", .{self.setting.distance * 1000}),
+                fw.im.formatZ(&buffer, "Distance: {d:.2} mm###distance", .{self.setting.distance * 1000}),
                 0,
                 1,
                 &self.setting.distance,
@@ -311,7 +312,7 @@ pub const Sample = struct {
             const joint_enabled = self.joint_setting_enable and self.optimize_enabled;
             var joint: i32 = @intCast(self.joint);
             if (gui.doSliderInt(
-                fw.im.formatZ(&buffer, "{s} ({d})", .{ self.jointName(), joint }),
+                fw.im.formatZ(&buffer, "{s} ({d})###joint", .{ self.jointName(), joint }),
                 0,
                 @intCast(self.skeleton.numJoints() - 1),
                 &joint,
@@ -330,7 +331,7 @@ pub const Sample = struct {
             rebuild = gui.doSlider(
                 fw.im.formatZ(
                     &buffer,
-                    "Joint tolerance: {d:.2} mm",
+                    "Joint tolerance: {d:.2} mm###joint_tolerance",
                     .{self.joint_setting.tolerance * 1000},
                 ),
                 0,
@@ -343,7 +344,7 @@ pub const Sample = struct {
             rebuild = gui.doSlider(
                 fw.im.formatZ(
                     &buffer,
-                    "Joint distance: {d:.2} mm",
+                    "Joint distance: {d:.2} mm###joint_distance",
                     .{self.joint_setting.distance * 1000},
                 ),
                 0,
@@ -357,7 +358,7 @@ pub const Sample = struct {
         if (gui.openClose("Builder settings", true)) {
             rebuild = gui.doCheckBox("Enable iframes", &self.enable_iframes, true) or rebuild;
             rebuild = gui.doSlider(
-                fw.im.formatZ(&buffer, "Iframe interval: {d:.2} s", .{self.iframe_interval}),
+                fw.im.formatZ(&buffer, "Iframe interval: {d:.2} s###iframe_interval", .{self.iframe_interval}),
                 0.1,
                 20,
                 &self.iframe_interval,
@@ -389,7 +390,7 @@ pub const Sample = struct {
             _ = gui.doRadioButton(3, "Side by side", &selected, true);
             self.display = @enumFromInt(selected);
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Side by side offset: {d:.2} m", .{self.side_by_side_offset}),
+                fw.im.formatZ(&buffer, "Side by side offset: {d:.2} m###side_by_side_offset", .{self.side_by_side_offset}),
                 0,
                 4,
                 &self.side_by_side_offset,

@@ -239,7 +239,7 @@ pub const Sample = struct {
 
         if (gui.openClose("Sample control", true)) {
             _ = gui.doSliderInt(
-                fw.im.formatZ(&buffer, "Number of entities: {d}", .{self.character_count}),
+                fw.im.formatZ(&buffer, "Number of entities: {d}###character_count", .{self.character_count}),
                 1,
                 @intCast(max_characters),
                 &self.character_count,
@@ -255,7 +255,7 @@ pub const Sample = struct {
             _ = gui.doCheckBox("Enables threading", &self.threading_enabled, true);
             if (self.threading_enabled) {
                 _ = gui.doSliderInt(
-                    fw.im.formatZ(&buffer, "Grain size: {d}", .{self.grain_size}),
+                    fw.im.formatZ(&buffer, "Grain size: {d}###grain_size", .{self.grain_size}),
                     @intCast(min_grain_size),
                     @intCast(max_characters),
                     &self.grain_size,

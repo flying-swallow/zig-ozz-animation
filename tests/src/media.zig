@@ -161,19 +161,18 @@ fn nativeMeshRoundTrip(allocator: std.mem.Allocator, value: ozz.geometry.Mesh) !
     try std.testing.expectEqual(@as(usize, 0), reader.bufferedLen());
 }
 
-fn nativeTrackRoundTrip(
-    comptime T: type,
+fn nativeTrackRoundTrip(comptime kind: ozz.animation.ValueKind,
     allocator: std.mem.Allocator,
-    value: ozz.animation.Track(T),
+    value: ozz.animation.Track(kind),
 ) !void {
     var bytes: std.Io.Writer.Allocating = .init(allocator);
     defer bytes.deinit();
-    try ozz.io.writeTrack(T, allocator, &bytes.writer, value);
+    try ozz.io.writeTrack(kind, allocator, &bytes.writer, value);
     var reader = std.Io.Reader.fixed(bytes.writer.buffered());
-    var decoded = try ozz.io.readTrack(T, allocator, &reader, .{});
+    var decoded = try ozz.io.readTrack(kind, allocator, &reader, .{});
     defer decoded.deinit();
     try std.testing.expectEqualStrings(value.name, decoded.name);
-    try std.testing.expectEqualSlices(ozz.animation.Track(T).Key, value.keys, decoded.keys);
+    try std.testing.expectEqualSlices(ozz.animation.Track(kind).Key, value.keys, decoded.keys);
     try std.testing.expectEqual(@as(usize, 0), reader.bufferedLen());
 }
 
@@ -243,30 +242,30 @@ fn validateFixture(fixture: Fixture) !void {
             },
             .float_track => {
                 var reader = std.Io.Reader.fixed(view);
-                var value = try ozz.legacy.readTrackPrefix(f32, allocator, &reader, .{}, &consumed);
+                var value = try ozz.legacy.readTrackPrefix(.float, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 _ = value.sampleAt(0.5);
-                try nativeTrackRoundTrip(f32, allocator, value);
+                try nativeTrackRoundTrip(.float, allocator, value);
             },
             .float3_track => {
                 var reader = std.Io.Reader.fixed(view);
-                var value = try ozz.legacy.readTrackPrefix(ozz.math.Vec3f32, allocator, &reader, .{}, &consumed);
+                var value = try ozz.legacy.readTrackPrefix(.float3, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 if (value.keys.len != 0) {
                     const sample = value.sampleAt(0.5);
                     try std.testing.expect(std.math.isFinite(sample[0]));
                 }
-                try nativeTrackRoundTrip(ozz.math.Vec3f32, allocator, value);
+                try nativeTrackRoundTrip(.float3, allocator, value);
             },
             .quaternion_track => {
                 var reader = std.Io.Reader.fixed(view);
-                var value = try ozz.legacy.readTrackPrefix(ozz.math.Quaternion, allocator, &reader, .{}, &consumed);
+                var value = try ozz.legacy.readTrackPrefix(.quaternion, allocator, &reader, .{}, &consumed);
                 defer value.deinit();
                 if (value.keys.len != 0) {
                     const sample = value.sampleAt(0.5);
-                    try std.testing.expect(std.math.isFinite(sample.w));
+                    try std.testing.expect(std.math.isFinite(sample[3]));
                 }
-                try nativeTrackRoundTrip(ozz.math.Quaternion, allocator, value);
+                try nativeTrackRoundTrip(.quaternion, allocator, value);
             },
             .sample_mesh => {
                 var reader = std.Io.Reader.fixed(view);
@@ -417,7 +416,7 @@ test "representative upstream media truncation is rejected" {
                 var reader = std.Io.Reader.fixed(truncated);
                 try std.testing.expectError(
                     ozz.legacy.Error.TruncatedArchive,
-                    ozz.legacy.readTrack(f32, std.testing.allocator, &reader, .{}),
+                    ozz.legacy.readTrack(.float, std.testing.allocator, &reader, .{}),
                 );
             },
             .sample_mesh => {

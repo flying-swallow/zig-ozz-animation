@@ -6,7 +6,7 @@
 //! Partial blending animates the lower and the upper part of the skeleton with
 //! two different clips. It is the same `ozz.animation.blend` as the "blend"
 //! sample, with one addition: every layer carries a per-joint weight mask, an
-//! SoA array of `SimdFloat4` in skeleton joint order, which modulates the layer
+//! SoA array of `Vec4f32` in skeleton joint order, which modulates the layer
 //! weight joint by joint.
 //!
 //! The masks are built by walking the sub-tree of a selectable "upper body root"
@@ -15,7 +15,7 @@
 
 const std = @import("std");
 const ozz = @import("zig_ozz_animation");
-const rhi = @import("rhi");
+const quat = ozz.math.quat;
 const fw = @import("framework");
 
 pub const name = "partial_blend";
@@ -52,14 +52,14 @@ const Sampler = struct {
     /// Runtime animation, sampling context and local-space output.
     clip: fw.utils.Clip,
     /// Per-joint weights defining the partial animation mask. Soa structure:
-    /// one `SimdFloat4` per four joints, in skeleton order.
-    joint_weights: []ozz.math.SimdFloat4,
+    /// one `Vec4f32` per four joints, in skeleton order.
+    joint_weights: []ozz.math.Vec4f32,
 };
 
 /// Visitor handed to `iterateJointsDF`, writing one weight per visited joint
 /// into the SoA mask (upstream's `WeightSetupIterator`).
 const WeightSetupIterator = struct {
-    weights: []ozz.math.SimdFloat4,
+    weights: []ozz.math.Vec4f32,
     weight_setting: f32,
 
     pub fn visit(self: WeightSetupIterator, joint: usize, parent: i16) void {
@@ -125,7 +125,7 @@ pub const Sample = struct {
             if (skeleton.numJoints() != clip.animation.numTracks()) {
                 return error.SkeletonAnimationMismatch;
             }
-            const joint_weights = try allocator.alloc(ozz.math.SimdFloat4, soa_joints);
+            const joint_weights = try allocator.alloc(ozz.math.Vec4f32, soa_joints);
             sampler.* = .{ .clip = clip, .joint_weights = joint_weights };
             loaded += 1;
         }
@@ -277,7 +277,7 @@ pub const Sample = struct {
             _ = gui.doSlider(
                 fw.im.formatZ(
                     &buffer,
-                    "Upper body weight: {d:.2}",
+                    "Upper body weight: {d:.2}###upper_body_weight",
                     .{self.upper_body_weight},
                 ),
                 0,
@@ -295,12 +295,12 @@ pub const Sample = struct {
             const titles = [num_layers][]const u8{ "Lower body layer:", "Upper body layer:" };
             for (&self.samplers, titles, 0..) |*sampler, title, index| {
                 gui.doLabel("{s}", .{title});
-                pushId(gui, index);
-                defer popId(gui);
+                gui.pushId(index);
+                defer gui.popId();
                 _ = gui.doSlider(
                     fw.im.formatZ(
                         &buffer,
-                        "Layer weight: {d:.2}",
+                        "Layer weight: {d:.2}###weight_setting",
                         .{sampler.weight_setting},
                     ),
                     0,
@@ -312,7 +312,7 @@ pub const Sample = struct {
                 _ = gui.doSlider(
                     fw.im.formatZ(
                         &buffer,
-                        "Joints weight: {d:.2}",
+                        "Joints weight: {d:.2}###joint_weight_setting",
                         .{sampler.joint_weight_setting},
                     ),
                     0,
@@ -325,7 +325,7 @@ pub const Sample = struct {
 
             gui.doLabel("Global settings:", .{});
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Threshold: {d:.2}", .{self.threshold}),
+                fw.im.formatZ(&buffer, "Threshold: {d:.2}###threshold", .{self.threshold}),
                 0.01,
                 1,
                 &self.threshold,
@@ -341,7 +341,7 @@ pub const Sample = struct {
             gui.doLabel("Root of the upper body hierarchy:", .{});
             const root = self.upperBodyRoot();
             if (gui.doSliderInt(
-                fw.im.formatZ(&buffer, "{s} ({d})", .{ self.skeleton.names[root], root }),
+                fw.im.formatZ(&buffer, "{s} ({d})###upper_body_root", .{ self.skeleton.names[root], root }),
                 0,
                 @intCast(self.skeleton.numJoints() - 1),
                 &self.upper_body_root,
@@ -360,8 +360,8 @@ pub const Sample = struct {
             };
             for (&self.samplers, titles, 0..) |*sampler, title, index| {
                 if (!gui.openClose(title, true)) continue;
-                pushId(gui, index);
-                defer popId(gui);
+                gui.pushId(index);
+                defer gui.popId();
                 sampler.controller.onGui(gui, sampler.clip.duration(), true, true);
             }
         }
@@ -374,31 +374,12 @@ pub const Sample = struct {
     }
 };
 
-/// Scopes widget identifiers, so the two identical layer panels do not collide
-/// inside Dear ImGui's id stack. `framework/im.zig` publishes no `pushId`, so
-/// the C api is reached directly; the body is not even analysed in a build
-/// without ImGui.
-fn pushId(gui: *fw.Im, index: usize) void {
-    if (fw.im.has_imgui) {
-        if (!gui.enabled) return;
-        rhi.imgui_c.ImGui_PushIDInt(@intCast(index));
-    }
-}
-
-/// Closes the scope opened by `pushId`.
-fn popId(gui: *fw.Im) void {
-    if (fw.im.has_imgui) {
-        if (!gui.enabled) return;
-        rhi.imgui_c.ImGui_PopID();
-    }
-}
-
 // -----------------------------------------------------------------------------
 // Tests. GPU-free: `init`, `onUpdate` and `onGui` never touch the renderer.
 // -----------------------------------------------------------------------------
 
 /// Reads one joint's weight out of an SoA mask.
-fn maskWeight(weights: []const ozz.math.SimdFloat4, joint: usize) f32 {
+fn maskWeight(weights: []const ozz.math.Vec4f32, joint: usize) f32 {
     return ozz.math.lane(weights[joint / 4], joint % 4);
 }
 
@@ -490,7 +471,7 @@ test "the blend follows one clip per body part" {
             1e-4,
         );
         try std.testing.expect(
-            ozz.math.Quaternion.approxRotationEq(expected.rotation, blended.rotation, 0.999),
+            ozz.math.quat.approxRotationEq(expected.rotation, blended.rotation, 0.999),
         );
     }
 

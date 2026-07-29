@@ -21,9 +21,9 @@ fn finite3(v: math.Vec3f32) bool {
     return std.math.isFinite(v[0]) and std.math.isFinite(v[1]) and std.math.isFinite(v[2]);
 }
 
-fn finiteQuat(v: math.Quaternion) bool {
-    return std.math.isFinite(v.x) and std.math.isFinite(v.y) and
-        std.math.isFinite(v.z) and std.math.isFinite(v.w);
+fn finiteQuat(v: math.Quat4f32) bool {
+    return std.math.isFinite(v[0]) and std.math.isFinite(v[1]) and
+        std.math.isFinite(v[2]) and std.math.isFinite(v[3]);
 }
 
 pub const JointInput = struct {
@@ -97,9 +97,9 @@ pub const Float3Key = struct {
     value: math.Vec3f32,
 };
 
-pub const QuaternionKey = extern struct {
+pub const QuaternionKey = struct {
     ratio: f32,
-    value: math.Quaternion,
+    value: math.Quat4f32,
 };
 
 pub const JointTrackInput = struct {
@@ -419,10 +419,10 @@ fn sampleQuaternion(
     keys: []const QuaternionKey,
     ratio: f32,
     cache: *u32,
-    fallback: math.Quaternion,
+    fallback: math.Quat4f32,
     forward: bool,
     seed: u32,
-) math.Quaternion {
+) math.Quat4f32 {
     if (keys.len == 0) return fallback;
     if (keys.len == 1 or ratio <= keys[0].ratio) return keys[0].value;
     if (ratio >= keys[keys.len - 1].ratio) return keys[keys.len - 1].value;
@@ -430,7 +430,7 @@ fn sampleQuaternion(
     const a = keys[i];
     const b = keys[i + 1];
     const alpha = (ratio - a.ratio) / (b.ratio - a.ratio);
-    return math.Quaternion.nlerp(a.value, b.value, alpha);
+    return math.quat.nlerp(a.value, b.value, alpha);
 }
 
 pub fn sample(
@@ -579,7 +579,7 @@ pub fn iterateJointsDFReverse(skeleton: Skeleton, visitor: anytype) void {
 pub const BlendLayer = struct {
     transforms: []const math.SoaTransform,
     weight: f32,
-    joint_weights: ?[]const math.SimdFloat4 = null,
+    joint_weights: ?[]const math.Vec4f32 = null,
 };
 
 pub const BlendOptions = struct {
@@ -612,7 +612,7 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
             const rest = math.soaLane(rest_soa, lane);
             var translation = @as(math.Vec3f32, @splat(0));
             var scale = @as(math.Vec3f32, @splat(0));
-            var rotation: math.Quaternion = .{ .x = 0, .y = 0, .z = 0, .w = 0 };
+            var rotation: math.Quat4f32 = @splat(0);
             var total: f32 = 0;
             for (options.layers) |layer| {
                 var weight = @max(layer.weight, 0);
@@ -622,28 +622,22 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                 translation = math.vec.add(translation, math.vec.scale(t.translation, weight));
                 scale = math.vec.add(scale, math.vec.scale(t.scale, weight));
                 var q = t.rotation;
-                if (total > 0 and math.Quaternion.dot(rotation, q) < 0) {
-                    q = .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w };
+                if (total > 0 and math.quat.dot(rotation, q) < 0) {
+                    q = -q;
                 }
-                rotation.x += q.x * weight;
-                rotation.y += q.y * weight;
-                rotation.z += q.z * weight;
-                rotation.w += q.w * weight;
+                rotation += q * @as(math.Quat4f32, @splat(weight));
                 total += weight;
             }
             if (total < options.threshold) {
                 const rest_weight = options.threshold - total;
                 translation = math.vec.add(translation, math.vec.scale(rest.translation, rest_weight));
                 scale = math.vec.add(scale, math.vec.scale(rest.scale, rest_weight));
-                rotation.x += rest.rotation.x * rest_weight;
-                rotation.y += rest.rotation.y * rest_weight;
-                rotation.z += rest.rotation.z * rest_weight;
-                rotation.w += rest.rotation.w * rest_weight;
+                rotation += rest.rotation * @as(math.Quat4f32, @splat(rest_weight));
                 total = options.threshold;
             }
             var result: math.Transform = .{
                 .translation = math.vec.scale(translation, 1 / total),
-                .rotation = math.Quaternion.normalize(rotation),
+                .rotation = math.quat.normalize(rotation),
                 .scale = math.vec.scale(scale, 1 / total),
             };
             for (options.additive_layers) |layer| {
@@ -657,9 +651,9 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                         result.scale,
                         math.approx.lerp_exact(@as(math.Vec3f32, @splat(1)), add.scale, weight),
                     );
-                    result.rotation = math.Quaternion.mul(
+                    result.rotation = math.quat.mul(
                         result.rotation,
-                        math.Quaternion.nlerp(.identity, add.rotation, weight),
+                        math.quat.nlerp(math.quat.identity, add.rotation, weight),
                     );
                 } else {
                     const weighted_scale = math.approx.lerp_exact(
@@ -675,9 +669,9 @@ pub fn blend(options: BlendOptions, output: []math.SoaTransform) !void {
                             1 / weighted_scale[2],
                         },
                     );
-                    result.rotation = math.Quaternion.mul(
+                    result.rotation = math.quat.mul(
                         result.rotation,
-                        math.Quaternion.nlerp(.identity, math.Quaternion.conjugate(add.rotation), -weight),
+                        math.quat.nlerp(math.quat.identity, math.quat.conjugate(add.rotation), -weight),
                     );
                 }
             }
@@ -729,9 +723,36 @@ pub fn localToModel(options: LocalToModelOptions, output: []math.Float4x4) !void
 
 pub const Interpolation = enum(u8) { step, linear };
 
-pub fn Track(comptime T: type) type {
+/// Discriminates what a track's samples *mean*, which the value type cannot.
+///
+/// `math.Vec4f32` and `math.Quat4f32` are the same Zig type (`@Vector(4, f32)`), so a float4
+/// track and a rotation track are indistinguishable by `T` alone — yet they differ in archive
+/// tag, identity value, interpolation, and distance metric. Every such decision keys off this
+/// enum instead of the value type.
+pub const ValueKind = enum {
+    float,
+    float2,
+    float3,
+    float4,
+    quaternion,
+
+    pub fn Value(comptime self: ValueKind) type {
+        return switch (self) {
+            .float => f32,
+            .float2 => math.Vec2f32,
+            .float3 => math.Vec3f32,
+            .float4 => math.Vec4f32,
+            .quaternion => math.Quat4f32,
+        };
+    }
+};
+
+pub fn Track(comptime kind: ValueKind) type {
     return struct {
         const Self = @This();
+        const T = kind.Value();
+        pub const Value = T;
+        pub const value_kind = kind;
         pub const Key = struct {
             ratio: f32,
             value: T,
@@ -781,7 +802,7 @@ pub fn Track(comptime T: type) type {
         pub fn sampleAt(self: Self, ratio_in: f32) T {
             // Ozz runtime tracks are valid in their default/empty state and
             // sampling them returns the policy identity value.
-            if (self.keys.len == 0) return trackIdentity(T);
+            if (self.keys.len == 0) return trackIdentity(kind);
             const ratio = std.math.clamp(ratio_in, 0, 1);
             if (ratio <= self.keys[0].ratio) return self.keys[0].value;
             if (ratio >= self.keys[self.keys.len - 1].ratio) return self.keys[self.keys.len - 1].value;
@@ -791,30 +812,29 @@ pub fn Track(comptime T: type) type {
             const a = self.keys[i];
             const b = self.keys[i + 1];
             const t = (ratio - a.ratio) / (b.ratio - a.ratio);
-            return interpolate(T, a.value, b.value, t);
+            return interpolate(kind, a.value, b.value, t);
         }
     };
 }
 
-fn trackIdentity(comptime T: type) T {
-    if (T == math.Quaternion) return .identity;
-    return std.mem.zeroes(T);
+fn trackIdentity(comptime kind: ValueKind) kind.Value() {
+    if (kind == .quaternion) return math.quat.identity;
+    return std.mem.zeroes(kind.Value());
 }
 
-fn interpolate(comptime T: type, a: T, b: T, t: f32) T {
-    if (T == f32) return a + (b - a) * t;
-    if (T == math.Vec2f32) return math.approx.lerp_exact(a, b, t);
-    if (T == math.Vec3f32) return math.approx.lerp_exact(a, b, t);
-    if (T == math.Float4) return math.Float4.lerp(a, b, t);
-    if (T == math.Quaternion) return math.Quaternion.nlerp(a, b, t);
-    @compileError("unsupported track value type");
+fn interpolate(comptime kind: ValueKind, a: kind.Value(), b: kind.Value(), t: f32) kind.Value() {
+    return switch (kind) {
+        .float => a + (b - a) * t,
+        .float2, .float3, .float4 => math.approx.lerp_exact(a, b, t),
+        .quaternion => math.quat.nlerp(a, b, t),
+    };
 }
 
-pub const FloatTrack = Track(f32);
-pub const Float2Track = Track(math.Vec2f32);
-pub const Float3Track = Track(math.Vec3f32);
-pub const Float4Track = Track(math.Float4);
-pub const QuaternionTrack = Track(math.Quaternion);
+pub const FloatTrack = Track(.float);
+pub const Float2Track = Track(.float2);
+pub const Float3Track = Track(.float3);
+pub const Float4Track = Track(.float4);
+pub const QuaternionTrack = Track(.quaternion);
 
 pub const MotionLayer = struct {
     delta: math.Transform,
@@ -825,7 +845,7 @@ pub fn blendMotion(layers: []const MotionLayer) math.Transform {
     var accumulated_weight: f32 = 0;
     var weighted_length: f32 = 0;
     var direction = @as(math.Vec3f32, @splat(0));
-    var rotation: math.Quaternion = .{ .x = 0, .y = 0, .z = 0, .w = 0 };
+    var rotation: math.Quat4f32 = @splat(0);
     for (layers) |layer| {
         if (layer.weight <= 0) continue;
         const len = math.vec.norm(layer.delta.translation);
@@ -837,19 +857,16 @@ pub fn blendMotion(layers: []const MotionLayer) math.Transform {
             );
         }
         var q = layer.delta.rotation;
-        if (math.Quaternion.dot(rotation, q) < 0) {
-            q = .{ .x = -q.x, .y = -q.y, .z = -q.z, .w = -q.w };
+        if (math.quat.dot(rotation, q) < 0) {
+            q = -q;
         }
-        rotation.x += q.x * layer.weight;
-        rotation.y += q.y * layer.weight;
-        rotation.z += q.z * layer.weight;
-        rotation.w += q.w * layer.weight;
+        rotation += q * @as(math.Quat4f32, @splat(layer.weight));
         accumulated_weight += layer.weight;
     }
     const denom = math.vec.norm(direction) * accumulated_weight;
     return .{
         .translation = if (denom > 0) math.vec.scale(direction, weighted_length / denom) else @splat(0),
-        .rotation = math.Quaternion.normalize(rotation),
+        .rotation = math.quat.normalize(rotation),
         .scale = @splat(1),
     };
 }
@@ -866,7 +883,7 @@ pub const AimOptions = struct {
 };
 
 pub const AimResult = struct {
-    correction: math.Quaternion,
+    correction: math.Quat4f32,
     reached: bool,
 };
 
@@ -875,33 +892,33 @@ pub fn aimIk(options: AimOptions) !AimResult {
         return Error.InvalidLayer;
     }
     const inverse = math.Float4x4.inverse(options.joint) orelse
-        return .{ .correction = .identity, .reached = false };
+        return .{ .correction = math.quat.identity, .reached = false };
     const target = math.Float4x4.transformPoint(inverse, options.target);
     const forward_projection = math.vec.dot(options.forward, options.offset);
     const perpendicular_sq = math.vec.norm_sqr(options.offset) -
         forward_projection * forward_projection;
     const target_sq = math.vec.norm_sqr(target);
     if (perpendicular_sq > target_sq) {
-        return .{ .correction = .identity, .reached = false };
+        return .{ .correction = math.quat.identity, .reached = false };
     }
     // Ozz reports offset reachability independently from whether the target
     // direction can be resolved. A target at the joint is therefore reached,
     // but produces no correction.
-    if (target_sq == 0) return .{ .correction = .identity, .reached = true };
+    if (target_sq == 0) return .{ .correction = math.quat.identity, .reached = true };
     const intersection = @sqrt(@max(target_sq - perpendicular_sq, 0));
     const offset_forward = math.vec.add(
         options.offset,
         math.vec.scale(options.forward, intersection - forward_projection),
     );
-    const aim_rotation = math.Quaternion.fromTo(offset_forward, target);
-    const corrected_up = math.Quaternion.rotate(aim_rotation, options.up);
+    const aim_rotation = math.quat.fromTo(offset_forward, target);
+    const corrected_up = math.quat.rotate(aim_rotation, options.up);
     const pole_local = math.Float4x4.transformVector(inverse, options.pole_vector);
     const axis = math.vec.normalize(target);
     const current_normal_raw = math.vec.cross(corrected_up, axis);
     const desired_normal_raw = math.vec.cross(pole_local, axis);
     const current_normal_sq = math.vec.norm_sqr(current_normal_raw);
     const desired_normal_sq = math.vec.norm_sqr(desired_normal_raw);
-    var plane_rotation = math.Quaternion.identity;
+    var plane_rotation = math.quat.identity;
     if (current_normal_sq != 0 and desired_normal_sq != 0) {
         // Plane directions are meaningful at any non-zero magnitude. In
         // particular, ozz deliberately accepts very small up and pole vectors.
@@ -910,15 +927,15 @@ pub fn aimIk(options: AimOptions) !AimResult {
         const cosine = std.math.clamp(math.vec.dot(current_normal, desired_normal), -1, 1);
         var angle = std.math.acos(cosine);
         if (math.vec.dot(math.vec.cross(current_normal, desired_normal), axis) < 0) angle = -angle;
-        plane_rotation = math.Quaternion.fromAxisAngle(axis, angle);
+        plane_rotation = math.quat.fromAxisAngle(axis, angle);
     }
     const twist = if (options.twist_angle != 0)
-        math.Quaternion.fromAxisAngle(axis, options.twist_angle)
+        math.quat.fromAxisAngle(axis, options.twist_angle)
     else
-        math.Quaternion.identity;
-    const full = math.Quaternion.normalize(math.Quaternion.mul(twist, math.Quaternion.mul(plane_rotation, aim_rotation)));
+        math.quat.identity;
+    const full = math.quat.normalize(math.quat.mul(twist, math.quat.mul(plane_rotation, aim_rotation)));
     return .{
-        .correction = math.Quaternion.nlerp(.identity, full, std.math.clamp(options.weight, 0, 1)),
+        .correction = math.quat.nlerp(math.quat.identity, full, std.math.clamp(options.weight, 0, 1)),
         .reached = true,
     };
 }
@@ -936,8 +953,8 @@ pub const TwoBoneOptions = struct {
 };
 
 pub const TwoBoneResult = struct {
-    start_correction: math.Quaternion,
-    mid_correction: math.Quaternion,
+    start_correction: math.Quat4f32,
+    mid_correction: math.Quat4f32,
     reached: bool,
 };
 
@@ -946,12 +963,12 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
         return Error.InvalidLayer;
     }
     const weight = std.math.clamp(options.weight, 0, 1);
-    if (weight == 0) return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+    if (weight == 0) return .{ .start_correction = math.quat.identity, .mid_correction = math.quat.identity, .reached = false };
 
     const inv_start = math.Float4x4.inverse(options.start_joint) orelse
-        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+        return .{ .start_correction = math.quat.identity, .mid_correction = math.quat.identity, .reached = false };
     const inv_mid = math.Float4x4.inverse(options.mid_joint) orelse
-        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+        return .{ .start_correction = math.quat.identity, .mid_correction = math.quat.identity, .reached = false };
 
     const start_position = math.Float4x4.translation(options.start_joint);
     const mid_position = math.Float4x4.translation(options.mid_joint);
@@ -964,7 +981,7 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     const l1_sq = math.vec.norm_sqr(start_mid_ss);
     const l2_sq = math.vec.norm_sqr(mid_end_ss);
     if (l1_sq <= math.epsilon or l2_sq <= math.epsilon) {
-        return .{ .start_correction = .identity, .mid_correction = .identity, .reached = false };
+        return .{ .start_correction = math.quat.identity, .mid_correction = math.quat.identity, .reached = false };
     }
 
     const l1 = @sqrt(l1_sq);
@@ -998,16 +1015,16 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
     const bent_reference = math.vec.cross(start_mid_ms, options.mid_axis);
     const initial_sign: f32 = if (math.vec.dot(bent_reference, mid_end_ms) < 0) -1 else 1;
     const initial_angle = std.math.acos(initial_cos) * initial_sign;
-    const mid_full = math.Quaternion.fromAxisAngle(
+    const mid_full = math.quat.fromAxisAngle(
         options.mid_axis,
         std.math.acos(corrected_cos) - initial_angle,
     );
 
-    const rotated_mid_end_ms = math.Quaternion.rotate(mid_full, mid_end_ms);
+    const rotated_mid_end_ms = math.quat.rotate(mid_full, mid_end_ms);
     const rotated_mid_end_model = math.Float4x4.transformVector(options.mid_joint, rotated_mid_end_ms);
     const rotated_mid_end_ss = math.Float4x4.transformVector(inv_start, rotated_mid_end_model);
     const solved_end_ss = math.vec.add(start_mid_ss, rotated_mid_end_ss);
-    const end_to_target = math.Quaternion.fromTo(solved_end_ss, target_ss);
+    const end_to_target = math.quat.fromTo(solved_end_ss, target_ss);
     var start_full = end_to_target;
 
     if (math.vec.norm_sqr(target_ss) > math.epsilon) {
@@ -1015,7 +1032,7 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
         const reference_normal = math.vec.cross(target_ss, pole_ss);
         const mid_axis_model = math.Float4x4.transformVector(options.mid_joint, options.mid_axis);
         const mid_axis_ss = math.Float4x4.transformVector(inv_start, mid_axis_model);
-        const joint_normal = math.Quaternion.rotate(end_to_target, mid_axis_ss);
+        const joint_normal = math.quat.rotate(end_to_target, mid_axis_ss);
         if (math.vec.norm_sqr(reference_normal) > math.epsilon and
             math.vec.norm_sqr(joint_normal) > math.epsilon)
         {
@@ -1024,18 +1041,18 @@ pub fn twoBoneIk(options: TwoBoneOptions) !TwoBoneResult {
             const cosine = std.math.clamp(math.vec.dot(reference_unit, joint_unit), -1, 1);
             var axis = math.vec.normalize(target_ss);
             if (math.vec.dot(joint_normal, pole_ss) < 0) axis = math.vec.scale(axis, -1);
-            const plane = math.Quaternion.fromAxisAngle(axis, std.math.acos(cosine));
-            start_full = math.Quaternion.mul(plane, end_to_target);
+            const plane = math.quat.fromAxisAngle(axis, std.math.acos(cosine));
+            start_full = math.quat.mul(plane, end_to_target);
         }
         if (options.twist_angle != 0) {
-            const twist = math.Quaternion.fromAxisAngle(math.vec.normalize(target_ss), options.twist_angle);
-            start_full = math.Quaternion.mul(twist, start_full);
+            const twist = math.quat.fromAxisAngle(math.vec.normalize(target_ss), options.twist_angle);
+            start_full = math.quat.mul(twist, start_full);
         }
     }
 
     return .{
-        .start_correction = math.Quaternion.nlerp(.identity, math.Quaternion.normalize(start_full), weight),
-        .mid_correction = math.Quaternion.nlerp(.identity, mid_full, weight),
+        .start_correction = math.quat.nlerp(math.quat.identity, math.quat.normalize(start_full), weight),
+        .mid_correction = math.quat.nlerp(math.quat.identity, mid_full, weight),
         .reached = reached,
     };
 }
@@ -1144,7 +1161,7 @@ test "motion blending, IK, and triggering" {
         .target = .{ 0, 1, 0 },
         .joint = .identity,
     });
-    const aimed = math.Quaternion.rotate(aim.correction, .{ 1, 0, 0 });
+    const aimed = math.quat.rotate(aim.correction, .{ 1, 0, 0 });
     try std.testing.expectApproxEqAbs(@as(f32, 1), aimed[1], 1e-4);
 
     const two_bone = try twoBoneIk(.{

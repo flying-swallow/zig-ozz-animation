@@ -32,7 +32,8 @@ const ozz = @import("zig_ozz_animation");
 const fw = @import("framework");
 
 const Vec3f32 = ozz.math.Vec3f32;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Float4x4 = ozz.math.Float4x4;
 const Transform = ozz.math.Transform;
 const RawJoint = ozz.offline.RawJoint;
@@ -54,26 +55,26 @@ const trans_down: Vec3f32 = .{ 0, 0, 1 };
 const trans_foot: Vec3f32 = .{ 1, 0, 0 };
 
 /// Rest rotation of a left upper leg joint.
-fn rotLeftUp() Quaternion {
-    return Quaternion.fromAxisAngle(.{ 0, 1, 0 }, -std.math.pi / 2.0);
+fn rotLeftUp() Quat4f32 {
+    return quat.fromAxisAngle(.{ 0, 1, 0 }, -std.math.pi / 2.0);
 }
 
 /// Rest rotation of a left lower leg joint.
-fn rotLeftDown() Quaternion {
-    return Quaternion.mul(
-        Quaternion.fromAxisAngle(.{ 1, 0, 0 }, std.math.pi / 2.0),
-        Quaternion.fromAxisAngle(.{ 0, 1, 0 }, -std.math.pi / 2.0),
+fn rotLeftDown() Quat4f32 {
+    return quat.mul(
+        quat.fromAxisAngle(.{ 1, 0, 0 }, std.math.pi / 2.0),
+        quat.fromAxisAngle(.{ 0, 1, 0 }, -std.math.pi / 2.0),
     );
 }
 
 /// Rest rotation of a right upper leg joint.
-fn rotRightUp() Quaternion {
-    return Quaternion.fromAxisAngle(.{ 0, 1, 0 }, std.math.pi / 2.0);
+fn rotRightUp() Quat4f32 {
+    return quat.fromAxisAngle(.{ 0, 1, 0 }, std.math.pi / 2.0);
 }
 
 /// Rest rotation of a right lower leg joint. Upstream deliberately reuses the
 /// left rotation here; the mirroring happens in the animation keys.
-fn rotRightDown() Quaternion {
+fn rotRightDown() Quat4f32 {
     return rotLeftDown();
 }
 
@@ -431,7 +432,7 @@ pub const Sample = struct {
         // precision at the low end.
         var joints: i32 = @intCast(self.skeleton.numJoints());
         if (gui.doSliderInt(
-            fw.im.formatZ(&buffer, "Joints count: {d}", .{joints}),
+            fw.im.formatZ(&buffer, "Joints count: {d}###joints_count", .{joints}),
             min_joints,
             ozz.animation.max_joints,
             &joints,

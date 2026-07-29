@@ -12,7 +12,8 @@ const ozz = @import("zig_ozz_animation");
 const mesh_utils = @import("mesh.zig");
 
 const Vec3f32 = ozz.math.Vec3f32;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Float4x4 = ozz.math.Float4x4;
 const Transform = ozz.math.Transform;
 const vec = ozz.math.vec;
@@ -112,7 +113,7 @@ pub const PlaybackController = struct {
         // otherwise `previous_time_ratio` would be wrong.
         var ratio = self.time_ratio;
         if (gui.doSlider(
-            label(&buffer, "Animation time: {d:.2}", .{ratio * duration}),
+            label(&buffer, "Animation time: {d:.2}###time", .{ratio * duration}),
             0,
             1,
             &ratio,
@@ -126,7 +127,7 @@ pub const PlaybackController = struct {
         }
 
         _ = gui.doSlider(
-            label(&buffer, "Playback speed: {d:.2}", .{self.playback_speed}),
+            label(&buffer, "Playback speed: {d:.2}###speed", .{self.playback_speed}),
             -3,
             3,
             &self.playback_speed,
@@ -141,6 +142,9 @@ pub const PlaybackController = struct {
 
 /// Formats a zero-terminated widget label into `buffer`, truncating instead of
 /// failing when the formatted text does not fit.
+///
+/// A label whose text embeds a live value must end in a `###<key>` marker, or
+/// dragging the widget stops after one step; see `im.Im.doSlider`.
 fn label(buffer: []u8, comptime fmt: []const u8, args: anytype) [:0]const u8 {
     return std.mem.printSentinel(buffer, fmt, args, 0) catch {
         buffer[buffer.len - 1] = 0;
@@ -198,7 +202,7 @@ pub fn computePostureBounds(
 /// `transforms` may be a `[]ozz.math.SoaTransform` or a `[]ozz.math.SoaQuaternion`.
 pub fn multiplySoATransformQuaternion(
     index: usize,
-    quat: Quaternion,
+    delta: Quat4f32,
     transforms: anytype,
 ) void {
     // Derived from the element rather than the container so slices,
@@ -206,30 +210,30 @@ pub fn multiplySoATransformQuaternion(
     const Element = @TypeOf(transforms[index / 4]);
     // The dead branch is dropped because the condition is comptime known.
     if (comptime Element == ozz.math.SoaTransform) {
-        multiplySoaQuaternion(index, quat, &transforms[index / 4].rotation);
+        multiplySoaQuaternion(index, delta, &transforms[index / 4].rotation);
     } else {
-        multiplySoaQuaternion(index, quat, &transforms[index / 4]);
+        multiplySoaQuaternion(index, delta, &transforms[index / 4]);
     }
 }
 
-/// Right-multiplies one lane of an SoA quaternion by `quat`.
+/// Right-multiplies one lane of an SoA quaternion by `delta`.
 fn multiplySoaQuaternion(
     index: usize,
-    quat: Quaternion,
+    delta: Quat4f32,
     rotation: *ozz.math.SoaQuaternion,
 ) void {
     const lane_index = index & 3;
-    const current: Quaternion = .{
-        .x = ozz.math.lane(rotation.x, lane_index),
-        .y = ozz.math.lane(rotation.y, lane_index),
-        .z = ozz.math.lane(rotation.z, lane_index),
-        .w = ozz.math.lane(rotation.w, lane_index),
+    const current: Quat4f32 = .{
+        ozz.math.lane(rotation.x, lane_index),
+        ozz.math.lane(rotation.y, lane_index),
+        ozz.math.lane(rotation.z, lane_index),
+        ozz.math.lane(rotation.w, lane_index),
     };
-    const result = Quaternion.mul(current, quat);
-    ozz.math.setLane(&rotation.x, lane_index, result.x);
-    ozz.math.setLane(&rotation.y, lane_index, result.y);
-    ozz.math.setLane(&rotation.z, lane_index, result.z);
-    ozz.math.setLane(&rotation.w, lane_index, result.w);
+    const result = quat.mul(current, delta);
+    ozz.math.setLane(&rotation.x, lane_index, result[0]);
+    ozz.math.setLane(&rotation.y, lane_index, result[1]);
+    ozz.math.setLane(&rotation.z, lane_index, result[2]);
+    ozz.math.setLane(&rotation.w, lane_index, result[3]);
 }
 
 // -----------------------------------------------------------------------------
@@ -524,9 +528,14 @@ pub const RawSkeletonEditor = struct {
 fn editJoints(joints: []ozz.offline.RawJoint, gui: anytype, open_by_default: bool) bool {
     var modified = false;
     var buffer: [128]u8 = undefined;
-    for (joints) |*joint| {
+    for (joints, 0..) |*joint, index| {
         const title = label(&buffer, "{s}", .{joint.name});
         if (!gui.openClose(title, open_by_default)) continue;
+
+        // Sibling joints reuse the same axis labels, so each one gets its own
+        // scope in the id stack rather than fighting over one set of ids.
+        gui.pushId(index);
+        defer gui.popId();
 
         // Translation. `Vec3f32` is a `@Vector`, whose elements cannot be
         // addressed, so each component round-trips through a plain array.
@@ -534,7 +543,7 @@ fn editJoints(joints: []ozz.offline.RawJoint, gui: anytype, open_by_default: boo
         var translation: [3]f32 = joint.transform.translation;
         inline for (.{ "x", "y", "z" }, 0..) |axis, component| {
             modified = gui.doSlider(
-                label(&buffer, axis ++ " {d:.2}", .{translation[component]}),
+                label(&buffer, axis ++ " {d:.2}###translation_" ++ axis, .{translation[component]}),
                 -1,
                 1,
                 &translation[component],
@@ -547,13 +556,13 @@ fn editJoints(joints: []ozz.offline.RawJoint, gui: anytype, open_by_default: boo
         // Rotation, edited in degrees through an Euler decomposition.
         gui.doLabel("Rotation", .{});
         var euler: [3]f32 = vec.scale(
-            Quaternion.toEuler(joint.transform.rotation),
+            quat.toEuler(joint.transform.rotation),
             radian_to_degree,
         );
         var euler_modified = false;
         inline for (.{ "x", "y", "z" }, 0..) |axis, component| {
             euler_modified = gui.doSlider(
-                label(&buffer, axis ++ " {d:.3}", .{euler[component]}),
+                label(&buffer, axis ++ " {d:.3}###rotation_" ++ axis, .{euler[component]}),
                 -180,
                 180,
                 &euler[component],
@@ -563,7 +572,7 @@ fn editJoints(joints: []ozz.offline.RawJoint, gui: anytype, open_by_default: boo
         }
         if (euler_modified) {
             modified = true;
-            joint.transform.rotation = Quaternion.fromEuler(
+            joint.transform.rotation = quat.fromEuler(
                 vec.scale(@as(Vec3f32, euler), degree_to_radian),
             );
         }
@@ -571,7 +580,7 @@ fn editJoints(joints: []ozz.offline.RawJoint, gui: anytype, open_by_default: boo
         // Scale, forced uniform and never exactly zero.
         gui.doLabel("Scale", .{});
         var scale: f32 = joint.transform.scale[0];
-        if (gui.doSlider(label(&buffer, "{d:.2}", .{scale}), -1, 1, &scale, 1, true)) {
+        if (gui.doSlider(label(&buffer, "{d:.2}###scale", .{scale}), -1, 1, &scale, 1, true)) {
             modified = true;
             joint.transform.scale = @splat(if (scale != 0) scale else 0.01);
         }
@@ -595,6 +604,10 @@ const TestGui = struct {
     open: bool = true,
     click_next_button: bool = false,
     slider_delta: f32 = 0,
+
+    /// Depth of the `pushId` scopes still open, so the tests can catch an
+    /// unbalanced editor.
+    id_depth: usize = 0,
 
     fn beginForm(self: *TestGui, title: [:0]const u8) bool {
         _ = title;
@@ -630,7 +643,9 @@ const TestGui = struct {
         pow: f32,
         enabled: bool,
     ) bool {
-        _ = label_text;
+        // Mirrors the assert real sliders make: a value-bearing label without a
+        // `###` marker changes its ImGui id mid-drag and kills the drag.
+        std.debug.assert(std.mem.indexOf(u8, label_text, "###") != null);
         _ = pow;
         self.sliders += 1;
         if (!enabled or self.slider_delta == 0) return false;
@@ -644,6 +659,14 @@ const TestGui = struct {
     }
     fn separator(self: *TestGui) void {
         _ = self;
+    }
+    fn pushId(self: *TestGui, index: usize) void {
+        _ = index;
+        self.id_depth += 1;
+    }
+    fn popId(self: *TestGui) void {
+        std.debug.assert(self.id_depth > 0);
+        self.id_depth -= 1;
     }
 };
 
@@ -790,24 +813,24 @@ test "posture bounds apply the optional transform" {
 }
 
 test "multiplySoATransformQuaternion touches a single lane" {
-    const quarter_turn = Quaternion.fromAxisAngle(.{ 0, 1, 0 }, std.math.pi / 2.0);
+    const quarter_turn = quat.fromAxisAngle(.{ 0, 1, 0 }, std.math.pi / 2.0);
     var transforms = [_]ozz.math.SoaTransform{ozz.math.SoaTransform.identity};
 
     multiplySoATransformQuaternion(2, quarter_turn, transforms[0..]);
     for (0..4) |index| {
         const rotation = ozz.math.soaLane(transforms[0], index).rotation;
         if (index == 2) {
-            try std.testing.expect(Quaternion.approxRotationEq(rotation, quarter_turn, 0.9999));
+            try std.testing.expect(quat.approxRotationEq(rotation, quarter_turn, 0.9999));
         } else {
-            try std.testing.expect(Quaternion.approxRotationEq(rotation, .identity, 0.9999));
+            try std.testing.expect(quat.approxRotationEq(rotation, quat.identity, 0.9999));
         }
     }
 
     // The same helper accepts a plain SoaQuaternion array.
-    var rotations = [_]ozz.math.SoaQuaternion{ozz.math.SoaQuaternion.splat(.identity)};
+    var rotations = [_]ozz.math.SoaQuaternion{ozz.math.SoaQuaternion.splat(quat.identity)};
     multiplySoATransformQuaternion(1, quarter_turn, rotations[0..]);
     try std.testing.expectApproxEqAbs(
-        quarter_turn.y,
+        quarter_turn[1],
         ozz.math.lane(rotations[0].y, 1),
         1e-6,
     );
@@ -995,6 +1018,8 @@ test "raw skeleton editor reports modifications" {
     try std.testing.expect(!editor.onGui(&raw, &idle));
     try std.testing.expect(idle.sliders > 0);
     try std.testing.expectEqual(@as(usize, 6), idle.labels); // 3 labels per joint
+    // Each visited joint scopes its ids and closes that scope again.
+    try std.testing.expectEqual(@as(usize, 0), idle.id_depth);
 
     // Collapsed joints are not recursed into and never edited.
     var collapsed: TestGui = .{ .open = false, .slider_delta = 0.5 };
@@ -1014,7 +1039,7 @@ test "raw skeleton editor reports modifications" {
     try std.testing.expectEqual(scale[0], scale[2]);
     // The rotation sliders work in degrees and round-trip through Euler angles.
     const euler: [3]f32 = vec.scale(
-        Quaternion.toEuler(raw.roots[0].transform.rotation),
+        quat.toEuler(raw.roots[0].transform.rotation),
         radian_to_degree,
     );
     for (euler) |angle| try std.testing.expectApproxEqAbs(@as(f32, 0.25), angle, 1e-3);

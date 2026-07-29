@@ -268,10 +268,19 @@ fn readVec3f32(reader: *Reader) !math.Vec3f32 {
     return value;
 }
 
+fn readVec4f32(reader: *Reader) !math.Vec4f32 {
+    const value = serialization.readVec4f32(reader.stream, reader.endian) catch |err| switch (err) {
+        error.EndOfStream => return Error.TruncatedArchive,
+        else => |e| return e,
+    };
+    reader.pos += 4 * @sizeOf(f32);
+    return value;
+}
+
 fn readTransform(reader: *Reader) !math.Transform {
     return .{
         .translation = try readVec3f32(reader),
-        .rotation = try readXyzw(math.Quaternion, reader),
+        .rotation = try readVec4f32(reader),
         .scale = try readVec3f32(reader),
     };
 }
@@ -323,10 +332,10 @@ pub fn readSkeleton(
             inputs[index].rest_pose = .{
                 .translation = .{ values[lane], values[4 + lane], values[8 + lane] },
                 .rotation = .{
-                    .x = values[12 + lane],
-                    .y = values[16 + lane],
-                    .z = values[20 + lane],
-                    .w = values[24 + lane],
+                    values[12 + lane],
+                    values[16 + lane],
+                    values[20 + lane],
+                    values[24 + lane],
                 },
                 .scale = .{ values[28 + lane], values[32 + lane], values[36 + lane] },
             };
@@ -408,7 +417,7 @@ fn halfToFloat(value: u16) f32 {
     return @floatCast(half);
 }
 
-fn decompressQuaternion(values: [3]u16) math.Quaternion {
+fn decompressQuaternion(values: [3]u16) math.Quat4f32 {
     const bits = @as(u64, values[0]) |
         (@as(u64, values[1]) << 16) |
         (@as(u64, values[2]) << 32);
@@ -432,7 +441,7 @@ fn decompressQuaternion(values: [3]u16) math.Quaternion {
     for (components) |component| square_sum += component * component;
     components[largest] = @sqrt(@max(1 - square_sum, 0));
     if (negative) components[largest] = -components[largest];
-    return .{ .x = components[0], .y = components[1], .z = components[2], .w = components[3] };
+    return .{ components[0], components[1], components[2], components[3] };
 }
 
 fn decodeFloat3Tracks(
@@ -676,7 +685,7 @@ pub fn readRawSkeleton(
 
 fn readTimedValues(
     comptime Key: type,
-    comptime Value: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     reader: *Reader,
 ) ![]Key {
@@ -685,7 +694,7 @@ fn readTimedValues(
     errdefer allocator.free(result);
     if (count > 0) try expectVersion(reader, 1);
     for (result) |*key| {
-        key.* = .{ .time = try reader.float(), .value = try readValue(Value, reader) };
+        key.* = .{ .time = try reader.float(), .value = try readValue(kind, reader) };
     }
     return result;
 }
@@ -707,19 +716,19 @@ pub fn readRawAnimation(
     for (result.tracks) |*track| {
         track.translations = try readTimedValues(
             offline.TranslationKey,
-            math.Vec3f32,
+            .float3,
             allocator,
             &reader,
         );
         track.rotations = try readTimedValues(
             offline.RotationKey,
-            math.Quaternion,
+            .quaternion,
             allocator,
             &reader,
         );
         track.scales = try readTimedValues(
             offline.ScaleKey,
-            math.Vec3f32,
+            .float3,
             allocator,
             &reader,
         );
@@ -732,31 +741,33 @@ pub fn readRawAnimation(
     return result;
 }
 
-fn valueTag(comptime T: type, raw: bool) []const u8 {
-    if (T == f32) return if (raw) "ozz-raw_float_track\x00" else "ozz-float_track\x00";
-    if (T == math.Vec2f32) return if (raw) "ozz-raw_float2_track\x00" else "ozz-float2_track\x00";
-    if (T == math.Vec3f32) return if (raw) "ozz-raw_float3_track\x00" else "ozz-float3_track\x00";
-    if (T == math.Float4) return if (raw) "ozz-raw_float4_track\x00" else "ozz-float4_track\x00";
-    if (T == math.Quaternion) return if (raw) "ozz-raw_quat_track\x00" else "ozz-quat_track\x00";
-    @compileError("unsupported track value");
+fn valueTag(comptime kind: animation.ValueKind, raw: bool) []const u8 {
+    return switch (kind) {
+        .float => if (raw) "ozz-raw_float_track\x00" else "ozz-float_track\x00",
+        .float2 => if (raw) "ozz-raw_float2_track\x00" else "ozz-float2_track\x00",
+        .float3 => if (raw) "ozz-raw_float3_track\x00" else "ozz-float3_track\x00",
+        .float4 => if (raw) "ozz-raw_float4_track\x00" else "ozz-float4_track\x00",
+        .quaternion => if (raw) "ozz-raw_quat_track\x00" else "ozz-quat_track\x00",
+    };
 }
 
-fn readValue(comptime T: type, reader: *Reader) !T {
-    if (T == f32) return reader.float();
-    if (T == math.Vec2f32) return readVec2f32(reader);
-    if (T == math.Vec3f32) return readVec3f32(reader);
-    if (T == math.Float4 or T == math.Quaternion) return readXyzw(T, reader);
-    @compileError("unsupported track value");
+fn readValue(comptime kind: animation.ValueKind, reader: *Reader) !kind.Value() {
+    return switch (kind) {
+        .float => reader.float(),
+        .float2 => readVec2f32(reader),
+        .float3 => readVec3f32(reader),
+        .float4, .quaternion => readVec4f32(reader),
+    };
 }
 
 pub fn readTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     stream: *std.Io.Reader,
     limits: Limits,
-) !animation.Track(T) {
+) !animation.Track(kind) {
     var reader = try Reader.init(stream, limits);
-    var result = try readTrackBody(T, allocator, &reader);
+    var result = try readTrackBody(kind, allocator, &reader);
     errdefer result.deinit();
     try reader.finish();
     return result;
@@ -765,35 +776,35 @@ pub fn readTrack(
 /// Reads the first tagged runtime track in a legacy stream. `consumed` includes
 /// the stream's initial endian byte, making it suitable for archive iteration.
 pub fn readTrackPrefix(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     stream: *std.Io.Reader,
     limits: Limits,
     consumed: *usize,
-) !animation.Track(T) {
+) !animation.Track(kind) {
     var reader = try Reader.init(stream, limits);
-    const result = try readTrackBody(T, allocator, &reader);
+    const result = try readTrackBody(kind, allocator, &reader);
     consumed.* = reader.pos;
     return result;
 }
 
 fn readTrackBody(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     reader: *Reader,
-) !animation.Track(T) {
-    try reader.expectTag(valueTag(T, false));
+) !animation.Track(kind) {
+    try reader.expectTag(valueTag(kind, false));
     try expectVersion(reader, 1);
     const count = try reader.count();
     const signed_name_len = try reader.int(i32);
     if (signed_name_len < 0 or signed_name_len > reader.limits.max_string_bytes) {
         return Error.InvalidLength;
     }
-    const Key = animation.Track(T).Key;
+    const Key = animation.Track(kind).Key;
     const keys = try allocator.alloc(Key, count);
     defer allocator.free(keys);
     for (keys) |*key| key.ratio = try reader.float();
-    for (keys) |*key| key.value = try readValue(T, reader);
+    for (keys) |*key| key.value = try readValue(kind, reader);
     const step_bytes = try reader.readAlloc(allocator, (count + 7) / 8);
     defer allocator.free(step_bytes);
     for (keys, 0..) |*key, i| {
@@ -804,20 +815,20 @@ fn readTrackBody(
     }
     const name = try reader.readAlloc(allocator, @intCast(signed_name_len));
     defer allocator.free(name);
-    return animation.Track(T).initMixed(allocator, name, keys);
+    return animation.Track(kind).initMixed(allocator, name, keys);
 }
 
 pub fn readRawTrack(
-    comptime T: type,
+    comptime kind: animation.ValueKind,
     allocator: std.mem.Allocator,
     stream: *std.Io.Reader,
     limits: Limits,
-) !offline.RawTrack(T) {
+) !offline.RawTrack(kind) {
     var reader = try Reader.init(stream, limits);
-    try reader.expectTag(valueTag(T, true));
+    try reader.expectTag(valueTag(kind, true));
     try expectVersion(&reader, 1);
     const count = try reader.count();
-    const Key = offline.RawTrack(T).Key;
+    const Key = offline.RawTrack(kind).Key;
     const keys = try allocator.alloc(Key, count);
     defer allocator.free(keys);
     if (count > 0) try expectVersion(&reader, 1);
@@ -828,12 +839,12 @@ pub fn readRawTrack(
             else => return Error.InvalidData,
         };
         key.ratio = try reader.float();
-        key.value = try readValue(T, &reader);
+        key.value = try readValue(kind, &reader);
     }
     const name = try reader.string(allocator);
     defer allocator.free(name);
     try reader.finish();
-    return offline.RawTrack(T).init(allocator, name, keys);
+    return offline.RawTrack(kind).init(allocator, name, keys);
 }
 
 fn readLegacySlice(

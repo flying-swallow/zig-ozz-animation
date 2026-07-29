@@ -96,6 +96,21 @@ pub fn formatZ(buffer: []u8, comptime fmt: []const u8, args: anytype) [:0]const 
     return buffer[0..written :0];
 }
 
+/// Length of the leading part of `label` that Dear ImGui actually renders:
+/// everything before the `###` stable-id marker.
+///
+/// Dear ImGui's own widgets hide the suffix themselves; the hand-drawn widgets
+/// in this module go through `ImDrawList`, which does not, so they slice with
+/// this instead.
+pub fn visibleLen(label: []const u8) usize {
+    return std.mem.indexOf(u8, label, "###") orelse label.len;
+}
+
+/// Whether `label` carries a `###` stable-id marker, see `Im.doSlider`.
+pub fn hasStableId(label: []const u8) bool {
+    return std.mem.indexOf(u8, label, "###") != null;
+}
+
 /// Maps a value onto the `[0, 1]` slider position, inverting `sliderDenormalize`.
 pub fn sliderNormalize(value: f32, min: f32, max: f32, pow: f32) f32 {
     const lo = @min(min, max);
@@ -187,6 +202,26 @@ pub const Im = struct {
         return false;
     }
 
+    /// Scopes widget identifiers under `index`, so repeated panels — the same
+    /// controller drawn once per animation layer, the same editor once per joint
+    /// — do not collide inside Dear ImGui's id stack.
+    ///
+    /// Every `pushId` needs a matching `popId`; `defer gui.popId();` is the idiom.
+    pub fn pushId(self: *Im, index: usize) void {
+        if (has_imgui) {
+            if (!self.enabled) return;
+            ig.ImGui_PushIDInt(@intCast(index));
+        }
+    }
+
+    /// Closes the scope opened by `pushId`.
+    pub fn popId(self: *Im) void {
+        if (has_imgui) {
+            if (!self.enabled) return;
+            ig.ImGui_PopID();
+        }
+    }
+
     // -- widgets ------------------------------------------------------------
 
     /// Push button. Returns true on the frame it is released over the widget.
@@ -205,6 +240,16 @@ pub const Im = struct {
     /// when it was merely clamped back into `[min, max]`.
     ///
     /// A disabled slider leaves `value` completely untouched.
+    ///
+    /// `label` **must** end in a `###<key>` marker, asserted in debug builds.
+    /// Dear ImGui hashes the label into the item id and drops an item whose id
+    /// changed since the previous frame, clearing `ActiveId` with it. Upstream
+    /// prints the live value inside the label, so without `###` the id churns on
+    /// the first frame of a drag and the drag stops after a single step. `###`
+    /// resets the hash, keeping the id stable while the text moves. Keys need
+    /// only be stable frame-to-frame and unique within the enclosing window and
+    /// id stack, so a loop may format its index into the key or scope itself
+    /// with `pushId`.
     pub fn doSlider(
         self: *Im,
         label: [:0]const u8,
@@ -242,6 +287,10 @@ pub const Im = struct {
     /// Square 2D pad (upstream `DoSlider2D`): a full-width invisible button
     /// with a hand-drawn box, cross-hair and knob. Dragging maps the cursor
     /// into the `[min, max]` box on both axes, Y pointing up like upstream.
+    ///
+    /// `label` must carry a `###<key>` marker for the same reason `doSlider`
+    /// does — the invisible button's id comes from it. Only the text before the
+    /// marker is drawn on the pad.
     pub fn doSlider2D(
         self: *Im,
         label: [:0]const u8,
@@ -252,6 +301,7 @@ pub const Im = struct {
     ) bool {
         if (has_imgui) {
             if (!self.enabled) return false;
+            std.debug.assert(hasStableId(label));
             const initial = value.*;
 
             // Upstream's `AddWidget(-1.f)`: as wide as the container, square.
@@ -357,15 +407,19 @@ pub const Im = struct {
             );
 
             // Label centred over the pad, like upstream's `kMiddle` print.
-            const text_size = ig.ImGui_CalcTextSize(label.ptr);
-            ig.ImDrawList_AddText(
+            // `ImDrawList` renders raw text, so the `###` id marker is sliced off
+            // by hand; `CalcTextSizeEx` is asked to do the same for the metrics.
+            const shown = label[0..visibleLen(label)];
+            const text_size = ig.ImGui_CalcTextSizeEx(label.ptr, null, true, -1);
+            ig.ImDrawList_AddTextEx(
                 draw_list,
                 .{
                     .x = origin.x + (side - text_size.x) / 2,
                     .y = origin.y + (side - text_size.y) / 2,
                 },
                 text_color,
-                label.ptr,
+                shown.ptr,
+                shown.ptr + shown.len,
             );
 
             return initial[0] != value[0] or initial[1] != value[1];
@@ -481,6 +535,7 @@ pub const Im = struct {
     ) bool {
         if (has_imgui) {
             if (!self.enabled) return false;
+            std.debug.assert(hasStableId(label));
             const initial = value.*;
             var position = sliderNormalize(initial, min, max, pow);
 
@@ -600,6 +655,16 @@ test "graphMax rounds the upper bound up" {
     for ([_]f32{ 0.001, 0.5, 1, 7, 33, 999 }) |value| {
         try std.testing.expect(graphMax(value) >= value);
     }
+}
+
+test "stable id markers are detected and sliced off" {
+    try std.testing.expect(!hasStableId("Weight: 0.50"));
+    try std.testing.expect(hasStableId("Weight: 0.50###weight"));
+
+    // Only the text before the marker is rendered by the hand-drawn widgets.
+    try std.testing.expectEqual(@as(usize, 12), visibleLen("Weight: 0.50###weight"));
+    try std.testing.expectEqual(@as(usize, 12), visibleLen("Weight: 0.50"));
+    try std.testing.expectEqual(@as(usize, 0), visibleLen("###weight"));
 }
 
 test "disabled Im is inert" {

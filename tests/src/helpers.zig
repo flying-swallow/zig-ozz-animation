@@ -13,8 +13,15 @@ pub fn expectFloat3(expected: ozz.math.Vec3f32, actual: ozz.math.Vec3f32) !void 
     try expectFloat(expected[2], actual[2]);
 }
 
-pub fn expectQuaternion(expected: ozz.math.Quaternion, actual: ozz.math.Quaternion) !void {
-    const dot = @abs(ozz.math.Quaternion.dot(expected, actual));
+pub fn expectFloat4(expected: ozz.math.Vec4f32, actual: ozz.math.Vec4f32) !void {
+    try expectFloat(expected[0], actual[0]);
+    try expectFloat(expected[1], actual[1]);
+    try expectFloat(expected[2], actual[2]);
+    try expectFloat(expected[3], actual[3]);
+}
+
+pub fn expectQuaternion(expected: ozz.math.Quat4f32, actual: ozz.math.Quat4f32) !void {
+    const dot = @abs(ozz.math.quat.dot(expected, actual));
     try std.testing.expectApproxEqAbs(@as(f32, 1), dot, 2e-4);
 }
 

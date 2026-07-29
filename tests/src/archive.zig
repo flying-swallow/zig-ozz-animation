@@ -46,7 +46,7 @@ test "Write/SkeletonSerialize C++ compatible" {
             .parent = ozz.animation.no_parent,
             .rest_pose = .{
                 .translation = .{ 1, 2, 3 },
-                .rotation = ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 0.7),
+                .rotation = ozz.math.quat.fromAxisAngle(.{ 0, 1, 0 }, 0.7),
                 .scale = .{ 2, 3, 4 },
             },
         },
@@ -274,91 +274,91 @@ test "Native archive framing and payload rejection" {
 test "Empty and named native tracks preserve names" {
     const allocator = std.testing.allocator;
     inline for (.{ "", "test name" }) |name| {
-        var track = try ozz.animation.Track(f32).initMixed(allocator, name, &.{});
+        var track = try ozz.animation.Track(.float).initMixed(allocator, name, &.{});
         defer track.deinit();
         var bytes: std.Io.Writer.Allocating = .init(allocator);
         defer bytes.deinit();
-        try ozz.io.writeTrack(f32, allocator, &bytes.writer, track);
+        try ozz.io.writeTrack(.float, allocator, &bytes.writer, track);
         var reader = std.Io.Reader.fixed(bytes.writer.buffered());
-        var decoded = try ozz.io.readTrack(f32, allocator, &reader, .{});
+        var decoded = try ozz.io.readTrack(.float, allocator, &reader, .{});
         defer decoded.deinit();
         try std.testing.expectEqualStrings(name, decoded.name);
         try std.testing.expectEqual(@as(usize, 0), decoded.keys.len);
     }
 }
 
-fn roundTripTrack(comptime T: type, value: T) !void {
+fn roundTripTrack(comptime kind: ozz.animation.ValueKind, value: kind.Value()) !void {
     const allocator = std.testing.allocator;
-    var track = try ozz.animation.Track(T).initMixed(allocator, "track", &.{
+    var track = try ozz.animation.Track(kind).initMixed(allocator, "track", &.{
         .{ .ratio = 0, .value = value, .interpolation = .step },
         .{ .ratio = 1, .value = value },
     });
     defer track.deinit();
     var bytes: std.Io.Writer.Allocating = .init(allocator);
     defer bytes.deinit();
-    try ozz.io.writeTrack(T, allocator, &bytes.writer, track);
+    try ozz.io.writeTrack(kind, allocator, &bytes.writer, track);
     var reader = std.Io.Reader.fixed(bytes.writer.buffered());
-    var decoded = try ozz.io.readTrack(T, allocator, &reader, .{});
+    var decoded = try ozz.io.readTrack(kind, allocator, &reader, .{});
     defer decoded.deinit();
     try std.testing.expectEqualStrings("track", decoded.name);
     try std.testing.expectEqual(@as(usize, 2), decoded.keys.len);
-    try std.testing.expectEqualSlices(ozz.animation.Track(T).Key, track.keys, decoded.keys);
+    try std.testing.expectEqualSlices(ozz.animation.Track(kind).Key, track.keys, decoded.keys);
 }
 
 test "FilledFloat/TrackSerialize" {
-    try roundTripTrack(f32, 46);
+    try roundTripTrack(.float, 46);
 }
 
 test "FilledFloat2/TrackSerialize" {
-    try roundTripTrack(ozz.math.Vec2f32, .{ 4, 6 });
+    try roundTripTrack(.float2, .{ 4, 6 });
 }
 
 test "FilledFloat3/TrackSerialize" {
-    try roundTripTrack(ozz.math.Vec3f32, .{ 4, 6, 8 });
+    try roundTripTrack(.float3, .{ 4, 6, 8 });
 }
 
 test "FilledFloat4/TrackSerialize" {
-    try roundTripTrack(ozz.math.Float4, .{ .x = 4, .y = 6, .z = 8, .w = 10 });
+    try roundTripTrack(.float4, .{ 4, 6, 8, 10 });
 }
 
 test "FilledQuaternion/TrackSerialize" {
-    try roundTripTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 0.7));
+    try roundTripTrack(.quaternion, ozz.math.quat.fromAxisAngle(.{ 0, 1, 0 }, 0.7));
 }
 
-fn roundTripRawTrack(comptime T: type, value: T) !void {
+fn roundTripRawTrack(comptime kind: ozz.animation.ValueKind, value: kind.Value()) !void {
     const allocator = std.testing.allocator;
-    var track = try ozz.offline.RawTrack(T).init(allocator, "raw", &.{
+    var track = try ozz.offline.RawTrack(kind).init(allocator, "raw", &.{
         .{ .ratio = 0, .value = value, .interpolation = .linear },
         .{ .ratio = 1, .value = value, .interpolation = .step },
     });
     defer track.deinit();
     var bytes: std.Io.Writer.Allocating = .init(allocator);
     defer bytes.deinit();
-    try ozz.io.writeRawTrack(T, allocator, &bytes.writer, track);
+    try ozz.io.writeRawTrack(kind, allocator, &bytes.writer, track);
     var reader = std.Io.Reader.fixed(bytes.writer.buffered());
-    var decoded = try ozz.io.readRawTrack(T, allocator, &reader, .{});
+    var decoded = try ozz.io.readRawTrack(kind, allocator, &reader, .{});
     defer decoded.deinit();
     try std.testing.expectEqualStrings("raw", decoded.name);
     try std.testing.expectEqual(@as(usize, 2), decoded.keys.len);
-    try std.testing.expectEqualSlices(ozz.offline.RawTrack(T).Key, track.keys, decoded.keys);
+    try std.testing.expectEqualSlices(ozz.offline.RawTrack(kind).Key, track.keys, decoded.keys);
 }
 
 test "Filled/RawAnimationSerialize float" {
-    try roundTripRawTrack(f32, 46);
+    try roundTripRawTrack(.float, 46);
 }
 
 test "Float2/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Vec2f32, .{ 1, 2 });
+    try roundTripRawTrack(.float2, .{ 1, 2 });
 }
 
 test "Float3/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Vec3f32, .{ 1, 2, 3 });
+    try roundTripRawTrack(.float3, .{ 1, 2, 3 });
 }
 
 test "Float4/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Float4, .{ .x = 1, .y = 2, .z = 3, .w = 4 });
+    try roundTripRawTrack(.float4, .{ 1, 2, 3, 4 });
 }
 
 test "Quaternion/RawAnimationSerialize" {
-    try roundTripRawTrack(ozz.math.Quaternion, ozz.math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, 0.4));
+    try roundTripRawTrack(.quaternion, ozz.math.quat.fromAxisAngle(.{ 1, 0, 0 }, 0.4));
 }

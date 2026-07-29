@@ -114,14 +114,9 @@ test "VectorArithmeticAndNormalization/ozz_math" {
     try h.expectFloat(@sqrt(@as(f32, 5.25)), math.vec.norm(a3));
     try std.testing.expect(math.vec.is_normalized_default(math.vec.normalize(a3)));
 
-    const a4: math.Float4 = .{ .x = 0.5, .y = 1, .z = 2, .w = 3 };
-    try h.expectFloat(@sqrt(@as(f32, 14.25)), math.Float4.length(a4));
-    try std.testing.expect(math.Float4.isNormalized(math.Float4.normalize(a4)));
-    try std.testing.expect(math.Float4.approxEq(
-        .{ .x = 1, .y = 0, .z = 0, .w = 0 },
-        math.Float4.normalizeSafe(.zero, .{ .x = 1 }),
-        1e-6,
-    ));
+    const a4: math.Vec4f32 = .{ 0.5, 1, 2, 3 };
+    try h.expectFloat(@sqrt(@as(f32, 14.25)), math.vec.norm(a4));
+    try std.testing.expect(math.vec.is_normalized_default(math.vec.normalize(a4)));
 }
 
 test "VectorComparison/ozz_math" {
@@ -153,7 +148,7 @@ test "VectorComparison/ozz_math" {
 }
 
 test "VectorLoad4/ozz_math" {
-    try std.testing.expectEqual(math.Float4{ .x = 1, .y = 2, .z = 3, .w = 4 }, math.Float4{ .x = 1, .y = 2, .z = 3, .w = 4 });
+    try h.expectFloat4(.{ 1, 2, 3, 4 }, @as(math.Vec4f32, .{ 1, 2, 3, 4 }));
 }
 
 test "VectorLoad3/ozz_math" {
@@ -165,8 +160,8 @@ test "VectorLoad2/ozz_math" {
 }
 
 test "VectorConstant4/ozz_math" {
-    try std.testing.expectEqual(math.Float4{ .x = 0, .y = 0, .z = 0, .w = 0 }, math.Float4.zero);
-    try std.testing.expectEqual(math.Float4{ .x = 1, .y = 1, .z = 1, .w = 1 }, math.Float4.one);
+    try h.expectFloat4(@splat(0), @as(math.Vec4f32, @splat(0)));
+    try h.expectFloat4(@splat(1), @as(math.Vec4f32, @splat(1)));
 }
 
 test "VectorConstant3/ozz_math" {
@@ -180,11 +175,11 @@ test "VectorConstant2/ozz_math" {
 }
 
 test "VectorArithmetic4/ozz_math" {
-    const a: math.Float4 = .{ .x = 1, .y = 2, .z = 3, .w = 4 };
-    const b: math.Float4 = .{ .x = 4, .y = 3, .z = 2, .w = 1 };
-    try std.testing.expectEqual(math.Float4{ .x = 5, .y = 5, .z = 5, .w = 5 }, math.Float4.add(a, b));
-    try h.expectFloat(20, math.Float4.dot(a, b));
-    try std.testing.expect(math.Float4.isNormalized(math.Float4.normalize(a)));
+    const a: math.Vec4f32 = .{ 1, 2, 3, 4 };
+    const b: math.Vec4f32 = .{ 4, 3, 2, 1 };
+    try h.expectFloat4(.{ 5, 5, 5, 5 }, math.vec.add(a, b));
+    try h.expectFloat(20, math.vec.dot(a, b));
+    try std.testing.expect(math.vec.is_normalized_default(math.vec.normalize(a)));
 }
 
 test "VectorArithmetic3/ozz_math" {
@@ -203,10 +198,10 @@ test "VectorArithmetic2/ozz_math" {
 }
 
 test "VectorComparison4/ozz_math" {
-    const a: math.Float4 = .{ .x = 1, .y = 5, .z = -2, .w = 8 };
-    const b: math.Float4 = .{ .x = 2, .y = 4, .z = -3, .w = 9 };
-    try std.testing.expectEqual(math.Float4{ .x = 1, .y = 4, .z = -3, .w = 8 }, math.Float4.min(a, b));
-    try std.testing.expectEqual(math.Float4{ .x = 2, .y = 5, .z = -2, .w = 9 }, math.Float4.max(a, b));
+    const a: math.Vec4f32 = .{ 1, 5, -2, 8 };
+    const b: math.Vec4f32 = .{ 2, 4, -3, 9 };
+    try h.expectFloat4(.{ 1, 4, -3, 8 }, @min(a, b));
+    try h.expectFloat4(.{ 2, 5, -2, 9 }, @max(a, b));
 }
 
 test "VectorComparison3/ozz_math" {
@@ -225,35 +220,35 @@ test "VectorComparison2/ozz_math" {
 
 test "QuaternionQuaternionEuler/ozz_math" {
     const input: math.Vec3f32 = .{ 0.31, -0.47, 0.83 };
-    const q = math.Quaternion.fromEuler(input);
-    const output = math.Quaternion.toEuler(q);
+    const q = math.quat.fromEuler(input);
+    const output = math.quat.toEuler(q);
     try h.expectFloat3(input, output);
 }
 
 test "QuaternionConstant/ozz_math" {
-    try h.expectQuaternion(.{ .x = 0, .y = 0, .z = 0, .w = 1 }, math.Quaternion.identity);
+    try h.expectQuaternion(.{ 0, 0, 0, 1 }, math.quat.identity);
 }
 
 test "QuaternionAxisAngle/ozz_math" {
     const half_pi: f32 = @as(f32, std.math.pi) / 2;
-    try h.expectQuaternion(.identity, math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 0));
-    const positive = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
-    const negative_axis = math.Quaternion.fromAxisAngle(.{ 0, -1, 0 }, half_pi);
-    const negative_angle = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, -half_pi);
+    try h.expectQuaternion(math.quat.identity, math.quat.fromAxisAngle(.{ 0, 1, 0 }, 0));
+    const positive = math.quat.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
+    const negative_axis = math.quat.fromAxisAngle(.{ 0, -1, 0 }, half_pi);
+    const negative_angle = math.quat.fromAxisAngle(.{ 0, 1, 0 }, -half_pi);
     try h.expectQuaternion(negative_angle, negative_axis);
-    try h.expectFloat3(.{ 1, 0, 0 }, math.Quaternion.rotate(positive, .{ 0, 0, 1 }));
+    try h.expectFloat3(.{ 1, 0, 0 }, math.quat.rotate(positive, .{ 0, 0, 1 }));
     // The Zig adapter normalizes axes instead of asserting like the C++ API.
-    try h.expectQuaternion(positive, math.Quaternion.fromAxisAngle(.{ 0, 7, 0 }, half_pi));
+    try h.expectQuaternion(positive, math.quat.fromAxisAngle(.{ 0, 7, 0 }, half_pi));
 }
 
 test "QuaternionAxisCosAngle/ozz_math" {
     const angle: f32 = 1.123;
     const axis = math.vec.normalize(@as(math.Vec3f32, .{ 0.8198645, 0.03303398, -0.5716037 }));
     try h.expectQuaternion(
-        math.Quaternion.fromAxisAngle(axis, angle),
-        math.Quaternion.fromAxisCosAngle(axis, @cos(angle)),
+        math.quat.fromAxisAngle(axis, angle),
+        math.quat.fromAxisCosAngle(axis, @cos(angle)),
     );
-    try h.expectQuaternion(.identity, math.Quaternion.fromAxisCosAngle(.{ 0, 1, 0 }, 1));
+    try h.expectQuaternion(math.quat.identity, math.quat.fromAxisCosAngle(.{ 0, 1, 0 }, 1));
 }
 
 test "QuaternionFromVectors/ozz_math" {
@@ -265,75 +260,75 @@ test "QuaternionFromVectors/ozz_math" {
         .{ .from = .{ 2, 2, 2 }, .to = .{ -2, -2, -2 } },
     };
     for (cases) |case| {
-        const rotation = math.Quaternion.fromTo(case.from, case.to);
-        const rotated = math.Quaternion.rotate(rotation, math.vec.normalize(case.from));
+        const rotation = math.quat.fromTo(case.from, case.to);
+        const rotated = math.quat.rotate(rotation, math.vec.normalize(case.from));
         try h.expectFloat3(math.vec.normalize(case.to), rotated);
     }
-    try h.expectQuaternion(.identity, math.Quaternion.fromTo(@splat(0), .{ 1, 0, 0 }));
+    try h.expectQuaternion(math.quat.identity, math.quat.fromTo(@splat(0), .{ 1, 0, 0 }));
 }
 
 test "QuaternionFromUnitVectors/ozz_math" {
     const from = math.vec.normalize(@as(math.Vec3f32, .{ 1, 1, 0 }));
     const to = math.vec.normalize(@as(math.Vec3f32, .{ -1, 1, 0 }));
-    try h.expectFloat3(to, math.Quaternion.rotate(math.Quaternion.fromTo(from, to), from));
+    try h.expectFloat3(to, math.quat.rotate(math.quat.fromTo(from, to), from));
 }
 
 test "QuaternionCompare/ozz_math" {
-    const small = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 100);
-    try std.testing.expect(math.Quaternion.approxRotationEq(.identity, small, @cos(@as(f32, std.math.pi) / 100)));
-    try std.testing.expect(math.Quaternion.approxRotationEq(.identity, math.Quaternion.negate(small), @cos(@as(f32, std.math.pi) / 100)));
-    try std.testing.expect(!math.Quaternion.approxRotationEq(.identity, small, @cos(@as(f32, std.math.pi) / 400)));
+    const small = math.quat.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 100);
+    try std.testing.expect(math.quat.approxRotationEq(math.quat.identity, small, @cos(@as(f32, std.math.pi) / 100)));
+    try std.testing.expect(math.quat.approxRotationEq(math.quat.identity, math.quat.negate(small), @cos(@as(f32, std.math.pi) / 100)));
+    try std.testing.expect(!math.quat.approxRotationEq(math.quat.identity, small, @cos(@as(f32, std.math.pi) / 400)));
 }
 
 test "QuaternionArithmetic/ozz_math" {
-    const q = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 2);
-    try h.expectFloat3(.{ 0, 1, 0 }, math.Quaternion.rotate(q, .{ 1, 0, 0 }));
-    try h.expectQuaternion(.identity, math.Quaternion.mul(q, math.Quaternion.conjugate(q)));
+    const q = math.quat.fromAxisAngle(.{ 0, 0, 1 }, @as(f32, std.math.pi) / 2);
+    try h.expectFloat3(.{ 0, 1, 0 }, math.quat.rotate(q, .{ 1, 0, 0 }));
+    try h.expectQuaternion(math.quat.identity, math.quat.mul(q, math.quat.conjugate(q)));
 }
 
 test "QuaternionTransformVector/ozz_math" {
     const half_pi: f32 = @as(f32, std.math.pi) / 2;
-    const y = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
-    try h.expectFloat3(@splat(0), math.Quaternion.rotate(y, @splat(0)));
-    try h.expectFloat3(.{ 0, 1, 0 }, math.Quaternion.rotate(y, .{ 0, 1, 0 }));
-    try h.expectFloat3(.{ 0, 0, -2 }, math.Quaternion.rotate(y, .{ 2, 0, 0 }));
-    try h.expectFloat3(.{ 2, 0, 0 }, math.Quaternion.rotate(y, .{ 0, 0, 2 }));
+    const y = math.quat.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
+    try h.expectFloat3(@splat(0), math.quat.rotate(y, @splat(0)));
+    try h.expectFloat3(.{ 0, 1, 0 }, math.quat.rotate(y, .{ 0, 1, 0 }));
+    try h.expectFloat3(.{ 0, 0, -2 }, math.quat.rotate(y, .{ 2, 0, 0 }));
+    try h.expectFloat3(.{ 2, 0, 0 }, math.quat.rotate(y, .{ 0, 0, 2 }));
 }
 
 test "QuaternionConstructionAndInterpolation/ozz_math" {
     const half_pi: f32 = @as(f32, std.math.pi) / 2;
-    const axis_angle = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
-    try h.expectQuaternion(axis_angle, math.Quaternion.fromAxisCosAngle(.{ 0, 1, 0 }, @cos(half_pi)));
+    const axis_angle = math.quat.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
+    try h.expectQuaternion(axis_angle, math.quat.fromAxisCosAngle(.{ 0, 1, 0 }, @cos(half_pi)));
 
-    try h.expectQuaternion(.identity, math.Quaternion.fromTo(@splat(0), .{ 1, 0, 0 }));
-    try h.expectFloat3(.{ 1, 0, 0 }, math.Quaternion.rotate(math.Quaternion.fromTo(.{ 0, 0, 1 }, .{ 1, 0, 0 }), .{ 0, 0, 1 }));
-    try h.expectFloat3(-@as(math.Vec3f32, .{ 1, 0, 0 }), math.Quaternion.rotate(math.Quaternion.fromTo(.{ 1, 0, 0 }, -@as(math.Vec3f32, .{ 1, 0, 0 })), .{ 1, 0, 0 }));
+    try h.expectQuaternion(math.quat.identity, math.quat.fromTo(@splat(0), .{ 1, 0, 0 }));
+    try h.expectFloat3(.{ 1, 0, 0 }, math.quat.rotate(math.quat.fromTo(.{ 0, 0, 1 }, .{ 1, 0, 0 }), .{ 0, 0, 1 }));
+    try h.expectFloat3(-@as(math.Vec3f32, .{ 1, 0, 0 }), math.quat.rotate(math.quat.fromTo(.{ 1, 0, 0 }, -@as(math.Vec3f32, .{ 1, 0, 0 })), .{ 1, 0, 0 }));
 
-    const a = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, half_pi);
-    const b = math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
-    try std.testing.expect(math.Quaternion.isNormalized(a));
-    try h.expectQuaternion(.identity, math.Quaternion.mul(a, math.Quaternion.conjugate(a)));
-    const linear = math.Quaternion.lerp(a, b, 0.2);
-    try h.expectFloat(0.5656854, linear.x);
-    try h.expectFloat(0.14142136, linear.y);
-    try h.expectFloat(0, linear.z);
-    try h.expectFloat(0.70710677, linear.w);
-    try std.testing.expect(math.Quaternion.isNormalized(math.Quaternion.nlerp(a, b, 0.2)));
-    try std.testing.expect(math.Quaternion.isNormalized(math.Quaternion.slerp(a, b, 0.7)));
-    try std.testing.expect(math.Quaternion.approxRotationEq(a, math.Quaternion.negate(a), 0.999));
+    const a = math.quat.fromAxisAngle(.{ 1, 0, 0 }, half_pi);
+    const b = math.quat.fromAxisAngle(.{ 0, 1, 0 }, half_pi);
+    try std.testing.expect(math.quat.isNormalized(a));
+    try h.expectQuaternion(math.quat.identity, math.quat.mul(a, math.quat.conjugate(a)));
+    const linear = math.quat.lerp(a, b, 0.2);
+    try h.expectFloat(0.5656854, linear[0]);
+    try h.expectFloat(0.14142136, linear[1]);
+    try h.expectFloat(0, linear[2]);
+    try h.expectFloat(0.70710677, linear[3]);
+    try std.testing.expect(math.quat.isNormalized(math.quat.nlerp(a, b, 0.2)));
+    try std.testing.expect(math.quat.isNormalized(math.quat.slerp(a, b, 0.7)));
+    try std.testing.expect(math.quat.approxRotationEq(a, math.quat.negate(a), 0.999));
 }
 
 test "QuaternionEulerAdapterContract/ozz_math" {
     // The Zig adapter uses intrinsic XYZ component rotations. Upstream Ozz names
     // these fields yaw/pitch/roll and maps them to Y/Z/X axes respectively.
     const half_pi: f32 = @as(f32, std.math.pi) / 2;
-    try h.expectFloat3(.{ 0, 1, 0 }, math.Quaternion.rotate(math.Quaternion.fromEuler(.{ 0, 0, half_pi }), .{ 1, 0, 0 }));
-    try h.expectFloat3(.{ 1, 0, -1 }, math.Quaternion.rotate(
-        math.Quaternion.fromEuler(.{ 0, half_pi, 0 }),
+    try h.expectFloat3(.{ 0, 1, 0 }, math.quat.rotate(math.quat.fromEuler(.{ 0, 0, half_pi }), .{ 1, 0, 0 }));
+    try h.expectFloat3(.{ 1, 0, -1 }, math.quat.rotate(
+        math.quat.fromEuler(.{ 0, half_pi, 0 }),
         .{ 1, 0, 1 },
     ));
-    try h.expectFloat3(.{ 0, -1, 1 }, math.Quaternion.rotate(
-        math.Quaternion.fromEuler(.{ half_pi, 0, 0 }),
+    try h.expectFloat3(.{ 0, -1, 1 }, math.quat.rotate(
+        math.quat.fromEuler(.{ half_pi, 0, 0 }),
         .{ 0, 1, 1 },
     ));
 }
@@ -342,23 +337,23 @@ test "TransformCompositionAndInterpolation/ozz_math" {
     const half_pi: f32 = @as(f32, std.math.pi) / 2;
     const parent: math.Transform = .{
         .translation = .{ 1, 2, 3 },
-        .rotation = math.Quaternion.fromAxisAngle(.{ 0, 0, 1 }, half_pi),
+        .rotation = math.quat.fromAxisAngle(.{ 0, 0, 1 }, half_pi),
         .scale = .{ 2, 3, 4 },
     };
     const local: math.Transform = .{
         .translation = .{ 1, 0, 0 },
-        .rotation = math.Quaternion.fromAxisAngle(.{ 1, 0, 0 }, half_pi),
+        .rotation = math.quat.fromAxisAngle(.{ 1, 0, 0 }, half_pi),
         .scale = .{ 5, 6, 7 },
     };
     const combined = math.Transform.combine(parent, local);
     try h.expectFloat3(.{ 1, 4, 3 }, combined.translation);
     try h.expectFloat3(.{ 10, 18, 28 }, combined.scale);
-    try std.testing.expect(math.Quaternion.isNormalized(combined.rotation));
+    try std.testing.expect(math.quat.isNormalized(combined.rotation));
 
     const midpoint = math.Transform.lerp(.identity, parent, 0.5);
     try h.expectFloat3(.{ 0.5, 1, 1.5 }, midpoint.translation);
     try h.expectFloat3(.{ 1.5, 2, 2.5 }, midpoint.scale);
-    try std.testing.expect(math.Quaternion.isNormalized(midpoint.rotation));
+    try std.testing.expect(math.quat.isNormalized(midpoint.rotation));
 }
 
 test "Float4x4Arithmetic/ozz_simd_math" {

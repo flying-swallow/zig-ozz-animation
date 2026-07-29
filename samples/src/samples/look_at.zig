@@ -20,7 +20,8 @@ const fw = @import("framework");
 
 const Vec3f32 = ozz.math.Vec3f32;
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const vec = ozz.math.vec;
 
 pub const name = "look_at";
@@ -258,7 +259,7 @@ pub const Sample = struct {
 
         _ = gui.doCheckBox("Enable ik", &self.enable_ik, true);
         _ = gui.doSliderInt(
-            fw.im.formatZ(&buffer, "IK chain length: {d}", .{self.chain_length}),
+            fw.im.formatZ(&buffer, "IK chain length: {d}###chain_length", .{self.chain_length}),
             0,
             max_chain_length,
             &self.chain_length,
@@ -266,7 +267,7 @@ pub const Sample = struct {
             self.enable_ik,
         );
         _ = gui.doSlider(
-            fw.im.formatZ(&buffer, "Joint weight {d:.2}", .{self.joint_weight}),
+            fw.im.formatZ(&buffer, "Joint weight {d:.2}###joint_weight", .{self.joint_weight}),
             0,
             1,
             &self.joint_weight,
@@ -274,7 +275,7 @@ pub const Sample = struct {
             self.enable_ik,
         );
         _ = gui.doSlider(
-            fw.im.formatZ(&buffer, "Chain weight {d:.2}", .{self.chain_weight}),
+            fw.im.formatZ(&buffer, "Chain weight {d:.2}###chain_weight", .{self.chain_weight}),
             0,
             1,
             &self.chain_weight,
@@ -284,7 +285,7 @@ pub const Sample = struct {
         _ = gui.doSlider(
             fw.im.formatZ(
                 &buffer,
-                "Twist angle: {d:.0}",
+                "Twist angle: {d:.0}###twist_angle",
                 .{self.twist_angle * radian_to_degree},
             ),
             -std.math.pi,
@@ -302,18 +303,18 @@ pub const Sample = struct {
             const range: f32 = 3;
             gui.doLabel("Animated extent", .{});
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "{d:.2}", .{self.target_extent}),
+                fw.im.formatZ(&buffer, "{d:.2}###target_extent", .{self.target_extent}),
                 0,
                 range,
                 &self.target_extent,
                 1,
                 true,
             );
-            sliderVec3(gui, &buffer, &self.target_offset, -range, range, true);
+            sliderVec3(gui, &buffer, "target_offset", &self.target_offset, -range, range, true);
         }
 
         if (gui.openClose("Eyes offset", true)) {
-            sliderVec3(gui, &buffer, &self.eyes_offset, -0.5, 0.5, true);
+            sliderVec3(gui, &buffer, "eyes_offset", &self.eyes_offset, -0.5, 0.5, true);
         }
 
         if (gui.openClose("Display options", true)) {
@@ -358,7 +359,7 @@ pub const Sample = struct {
 
         // The same correction is reused every pass, exactly like the single
         // `SimdQuaternion` upstream hands to the job.
-        var correction: Quaternion = .identity;
+        var correction: Quat4f32 = quat.identity;
         var forward = head_forward;
         var offset = self.eyes_offset;
         var previous_joint: usize = self.chain[0];
@@ -369,11 +370,11 @@ pub const Sample = struct {
                 // then brings both back into this joint's local space.
                 const corrected_forward_ms = Float4x4.transformVector(
                     self.models[previous_joint],
-                    Quaternion.rotate(correction, forward),
+                    quat.rotate(correction, forward),
                 );
                 const corrected_offset_ms = Float4x4.transformPoint(
                     self.models[previous_joint],
-                    Quaternion.rotate(correction, offset),
+                    quat.rotate(correction, offset),
                 );
                 const inv_joint = Float4x4.inverse(self.models[joint]) orelse break;
                 // Upstream relies on the rig being scale-free to keep the
@@ -454,9 +455,13 @@ fn validateJointsOrder(skeleton: ozz.animation.Skeleton, joints: [max_chain_leng
 }
 
 /// Three `x` / `y` / `z` sliders over a vector.
+///
+/// `key` distinguishes the panels from each other: the axis labels alone repeat,
+/// and Dear ImGui hashes labels into item ids.
 fn sliderVec3(
     gui: *fw.Im,
     buffer: []u8,
+    comptime key: []const u8,
     value: *Vec3f32,
     min: f32,
     max: f32,
@@ -466,7 +471,7 @@ fn sliderVec3(
     var components: [3]f32 = value.*;
     inline for (.{ "x", "y", "z" }, 0..) |axis, index| {
         _ = gui.doSlider(
-            fw.im.formatZ(buffer, axis ++ " {d:.2}", .{components[index]}),
+            fw.im.formatZ(buffer, axis ++ " {d:.2}###" ++ key ++ "_" ++ axis, .{components[index]}),
             min,
             max,
             &components[index],

@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const ozz = @import("zig_ozz_animation");
+const quat = ozz.math.quat;
 const fw = @import("framework");
 
 pub const name = "additive";
@@ -49,7 +50,7 @@ const hand_extent: f32 = 0.15;
 /// Visitor handed to `iterateJointsDF`, writing one weight per visited joint
 /// into an SoA mask.
 const WeightSetupIterator = struct {
-    weights: []ozz.math.SimdFloat4,
+    weights: []ozz.math.Vec4f32,
     weight_setting: f32,
 
     pub fn visit(self: WeightSetupIterator, joint: usize, parent: i16) void {
@@ -75,7 +76,7 @@ pub const Sample = struct {
 
     /// Per-joint weights of the base animation mask, removing the hands from
     /// the base animation.
-    base_joint_weights: []ozz.math.SimdFloat4,
+    base_joint_weights: []ozz.math.Vec4f32,
 
     /// Whether the hands are masked out of the base layer. Upstream hard-codes
     /// this to true; the check box makes the mask observable.
@@ -90,7 +91,7 @@ pub const Sample = struct {
 
     /// Per-joint weights shared by both additive layers. Not exposed upstream:
     /// it restricts curl and splay to the sub-tree of `additive_mask_root`.
-    additive_joint_weights: []ozz.math.SimdFloat4,
+    additive_joint_weights: []ozz.math.Vec4f32,
 
     /// Whether the additive layers go through `additive_joint_weights`.
     mask_additive: bool = false,
@@ -130,9 +131,9 @@ pub const Sample = struct {
             return error.SkeletonAnimationMismatch;
         }
 
-        const base_joint_weights = try allocator.alloc(ozz.math.SimdFloat4, soa_joints);
+        const base_joint_weights = try allocator.alloc(ozz.math.Vec4f32, soa_joints);
         errdefer allocator.free(base_joint_weights);
-        const additive_joint_weights = try allocator.alloc(ozz.math.SimdFloat4, soa_joints);
+        const additive_joint_weights = try allocator.alloc(ozz.math.Vec4f32, soa_joints);
         errdefer allocator.free(additive_joint_weights);
         @memset(additive_joint_weights, @splat(1));
 
@@ -310,7 +311,7 @@ pub const Sample = struct {
         if (gui.openClose("Blending parameters", true)) {
             gui.doLabel("Main layer:", .{});
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Layer weight: {d:.2}", .{self.base_weight}),
+                fw.im.formatZ(&buffer, "Layer weight: {d:.2}###base_weight", .{self.base_weight}),
                 0,
                 1,
                 &self.base_weight,
@@ -327,7 +328,7 @@ pub const Sample = struct {
             if (gui.doSlider2D(
                 fw.im.formatZ(
                     &buffer,
-                    "Weights\nCurl: {d:.2}\nSplay: {d:.2}",
+                    "Weights\nCurl: {d:.2}\nSplay: {d:.2}###weights_2d",
                     .{ self.additive_weights[curl], self.additive_weights[splay] },
                 ),
                 .{ 0, 0 },
@@ -350,7 +351,7 @@ pub const Sample = struct {
                 gui.doLabel("Root of the additive layers:", .{});
                 const root = self.additiveMaskRoot();
                 _ = gui.doSliderInt(
-                    fw.im.formatZ(&buffer, "{s} ({d})", .{ self.skeleton.names[root], root }),
+                    fw.im.formatZ(&buffer, "{s} ({d})###additive_mask_root", .{ self.skeleton.names[root], root }),
                     0,
                     @intCast(self.skeleton.numJoints() - 1),
                     &self.additive_mask_root,
@@ -388,7 +389,7 @@ pub const Sample = struct {
 // -----------------------------------------------------------------------------
 
 /// Reads one joint's weight out of an SoA mask.
-fn maskWeight(weights: []const ozz.math.SimdFloat4, joint: usize) f32 {
+fn maskWeight(weights: []const ozz.math.Vec4f32, joint: usize) f32 {
     return ozz.math.lane(weights[joint / 4], joint % 4);
 }
 
@@ -495,7 +496,7 @@ test "the additive mask restricts the layers to a sub-tree" {
         if (joint >= hand and joint < end) continue;
         const with_mask = ozz.math.soaLane(masked[joint / 4], joint % 4);
         const without = ozz.math.soaLane(sample.locals[joint / 4], joint % 4);
-        try std.testing.expect(ozz.math.Quaternion.approxRotationEq(
+        try std.testing.expect(ozz.math.quat.approxRotationEq(
             with_mask.rotation,
             without.rotation,
             0.999,

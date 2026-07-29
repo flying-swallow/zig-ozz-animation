@@ -27,7 +27,8 @@ const fw = @import("framework");
 
 const Vec3f32 = ozz.math.Vec3f32;
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const vec = ozz.math.vec;
 
 pub const name = "two_bone_ik";
@@ -224,7 +225,7 @@ pub const Sample = struct {
             // Upstream gives soften a pow of 2 so the useful high end of the
             // range gets most of the slider travel.
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Soften: {d:.2}", .{self.soften}),
+                fw.im.formatZ(&buffer, "Soften: {d:.2}###soften", .{self.soften}),
                 0,
                 1,
                 &self.soften,
@@ -234,7 +235,7 @@ pub const Sample = struct {
             _ = gui.doSlider(
                 fw.im.formatZ(
                     &buffer,
-                    "Twist angle: {d:.0}",
+                    "Twist angle: {d:.0}###twist_angle",
                     .{self.twist_angle * radian_to_degree},
                 ),
                 -std.math.pi,
@@ -244,7 +245,7 @@ pub const Sample = struct {
                 self.two_bone_ik,
             );
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Weight: {d:.2}", .{self.weight}),
+                fw.im.formatZ(&buffer, "Weight: {d:.2}###weight", .{self.weight}),
                 0,
                 1,
                 &self.weight,
@@ -261,14 +262,14 @@ pub const Sample = struct {
             }
 
             if (gui.openClose("Pole vector", true)) {
-                sliderVec3(gui, &buffer, &self.pole_vector, -1, 1, self.two_bone_ik);
+                sliderVec3(gui, &buffer, "pole_vector", &self.pole_vector, -1, 1, self.two_bone_ik);
             }
         }
 
         if (gui.openClose("Target position", true)) {
             gui.doLabel("Target animation extent", .{});
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "{d:.2}", .{self.target_extent}),
+                fw.im.formatZ(&buffer, "{d:.2}###target_extent", .{self.target_extent}),
                 0,
                 1,
                 &self.target_extent,
@@ -277,19 +278,19 @@ pub const Sample = struct {
             );
 
             gui.doLabel("Target offset", .{});
-            sliderVec3(gui, &buffer, &self.target_offset, -1, 1, true);
+            sliderVec3(gui, &buffer, "target_offset", &self.target_offset, -1, 1, true);
         }
 
         if (gui.openClose("Root transformation", false)) {
             gui.doLabel("Translation", .{});
-            sliderVec3(gui, &buffer, &self.root_translation, -1, 1, true);
+            sliderVec3(gui, &buffer, "root_translation", &self.root_translation, -1, 1, true);
 
             gui.doLabel("Rotation", .{});
             var euler: [3]f32 = vec.scale(self.root_euler, radian_to_degree);
             var moved = false;
             inline for (.{ "pitch", "yaw", "roll" }, 0..) |axis, index| {
                 moved = gui.doSlider(
-                    fw.im.formatZ(&buffer, axis ++ " {d:.0}", .{euler[index]}),
+                    fw.im.formatZ(&buffer, axis ++ " {d:.0}###root_euler_" ++ axis, .{euler[index]}),
                     -180,
                     180,
                     &euler[index],
@@ -301,7 +302,7 @@ pub const Sample = struct {
 
             gui.doLabel("Scale", .{});
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "{d:.2}", .{self.root_scale}),
+                fw.im.formatZ(&buffer, "{d:.2}###root_scale", .{self.root_scale}),
                 -1,
                 1,
                 &self.root_scale,
@@ -350,7 +351,7 @@ pub const Sample = struct {
     fn rootTransform(self: Sample) Float4x4 {
         return Float4x4.fromTransform(.{
             .translation = self.root_translation,
-            .rotation = Quaternion.fromEuler(self.root_euler),
+            .rotation = quat.fromEuler(self.root_euler),
             .scale = @splat(self.root_scale),
         });
     }
@@ -406,9 +407,13 @@ pub const Sample = struct {
 
 /// Three `x` / `y` / `z` sliders over a vector, the layout upstream repeats for
 /// every `Float3` it exposes.
+///
+/// `key` distinguishes those repeats from each other: the axis labels alone are
+/// identical, and Dear ImGui hashes labels into item ids.
 fn sliderVec3(
     gui: *fw.Im,
     buffer: []u8,
+    comptime key: []const u8,
     value: *Vec3f32,
     min: f32,
     max: f32,
@@ -418,7 +423,7 @@ fn sliderVec3(
     var components: [3]f32 = value.*;
     inline for (.{ "x", "y", "z" }, 0..) |axis, index| {
         _ = gui.doSlider(
-            fw.im.formatZ(buffer, axis ++ " {d:.2}", .{components[index]}),
+            fw.im.formatZ(buffer, axis ++ " {d:.2}###" ++ key ++ "_" ++ axis, .{components[index]}),
             min,
             max,
             &components[index],

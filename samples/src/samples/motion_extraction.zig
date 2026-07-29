@@ -15,7 +15,8 @@ const ozz = @import("zig_ozz_animation");
 const fw = @import("framework");
 
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Vec3f32 = ozz.math.Vec3f32;
 const vec = ozz.math.vec;
 
@@ -212,7 +213,7 @@ pub const Sample = struct {
                 1,
                 step,
                 self.transform,
-                .identity,
+                quat.identity,
             );
         }
     }
@@ -296,15 +297,13 @@ pub const Sample = struct {
                 if (!baked_owned) extraction.baked.deinit();
             }
 
-            var position = try ozz.offline.optimizeTrack(
-                Vec3f32,
+            var position = try ozz.offline.optimizeTrack(.float3,
                 allocator,
                 extraction.position,
                 track_tolerance,
             );
             defer position.deinit();
-            var rotation = try ozz.offline.optimizeTrack(
-                Quaternion,
+            var rotation = try ozz.offline.optimizeTrack(.quaternion,
                 allocator,
                 extraction.rotation,
                 track_tolerance,
@@ -351,8 +350,8 @@ pub const Sample = struct {
             .baked = animation.memorySize(),
             .optimized = optimized.memorySize(),
             .runtime = clip.animation.memorySize(),
-            .tracks = trackSize(Vec3f32, motion_track.position) +
-                trackSize(Quaternion, motion_track.rotation),
+            .tracks = trackSize(.float3, motion_track.position) +
+                trackSize(.quaternion, motion_track.rotation),
             .position_keys = position_keys,
             .rotation_keys = rotation_keys,
         };
@@ -408,9 +407,9 @@ fn emptyMotionTrack(allocator: std.mem.Allocator) !fw.MotionTrack {
 }
 
 /// Byte size of a runtime track, which has no `memorySize` of its own.
-fn trackSize(comptime T: type, track: ozz.animation.Track(T)) usize {
-    return @sizeOf(ozz.animation.Track(T)) + track.name.len +
-        track.keys.len * @sizeOf(ozz.animation.Track(T).Key);
+fn trackSize(comptime kind: ozz.animation.ValueKind, track: ozz.animation.Track(kind)) usize {
+    return @sizeOf(ozz.animation.Track(kind)) + track.name.len +
+        track.keys.len * @sizeOf(ozz.animation.Track(kind).Key);
 }
 
 // -----------------------------------------------------------------------------
@@ -469,7 +468,7 @@ test "component settings decide which axes the path uses" {
     }
     // A rotation with no component selected extracts nothing at all.
     for (sample.motion_track.rotation.keys) |key| {
-        try std.testing.expect(Quaternion.approxRotationEq(key.value, .identity, 0.9999));
+        try std.testing.expect(quat.approxRotationEq(key.value, quat.identity, 0.9999));
     }
 
     // Selecting z as well brings that axis back.
@@ -519,14 +518,14 @@ test "the loop setting closes the extracted path" {
 
     sample.rotation = .{ .y = true, .bake = true, .loop = false };
     try sample.rebuild();
-    const open = Quaternion.dot(
+    const open = quat.dot(
         sample.motion_track.rotation.sampleAt(0),
         sample.motion_track.rotation.sampleAt(1),
     );
 
     sample.rotation.loop = true;
     try sample.rebuild();
-    const closed = Quaternion.dot(
+    const closed = quat.dot(
         sample.motion_track.rotation.sampleAt(0),
         sample.motion_track.rotation.sampleAt(1),
     );
@@ -596,6 +595,6 @@ test "an empty motion track samples to the identity transform" {
 
     const sampled = track.sample(0.5);
     try std.testing.expectEqual(Vec3f32{ 0, 0, 0 }, sampled.translation);
-    try std.testing.expect(Quaternion.approxRotationEq(sampled.rotation, .identity, 0.9999));
-    try std.testing.expect(trackSize(Vec3f32, track.position) > 0);
+    try std.testing.expect(quat.approxRotationEq(sampled.rotation, quat.identity, 0.9999));
+    try std.testing.expect(trackSize(.float3, track.position) > 0);
 }

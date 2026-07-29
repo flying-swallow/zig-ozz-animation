@@ -15,7 +15,8 @@ const ozz = @import("zig_ozz_animation");
 const fw = @import("framework");
 
 const Float4x4 = ozz.math.Float4x4;
-const Quaternion = ozz.math.Quaternion;
+const quat = ozz.math.quat;
+const Quat4f32 = ozz.math.Quat4f32;
 const Vec3f32 = ozz.math.Vec3f32;
 const vec = ozz.math.vec;
 
@@ -149,7 +150,7 @@ pub const Sample = struct {
                 current.translation
             else
                 @splat(0),
-            .rotation = if (self.apply_motion_rotation) current.rotation else .identity,
+            .rotation = if (self.apply_motion_rotation) current.rotation else quat.identity,
             .scale = current.scale,
         });
 
@@ -212,7 +213,7 @@ pub const Sample = struct {
             _ = gui.doCheckBox("Apply motion position", &self.apply_motion_position, true);
             _ = gui.doCheckBox("Apply motion rotation", &self.apply_motion_rotation, true);
             _ = gui.doSlider(
-                label(&buffer, "Angular vel: {d:.0} deg/s", .{
+                label(&buffer, "Angular vel: {d:.0} deg/s###angular_velocity", .{
                     self.angular_velocity * 180 / std.math.pi,
                 }),
                 -half_pi,
@@ -229,7 +230,7 @@ pub const Sample = struct {
 
             _ = gui.doCheckBox("Show trace", &self.show_trace, true);
             _ = gui.doSliderInt(
-                label(&buffer, "Trace size: {d}", .{self.trace_size}),
+                label(&buffer, "Trace size: {d}###trace_size", .{self.trace_size}),
                 100,
                 max_trace_size,
                 &self.trace_size,
@@ -242,7 +243,7 @@ pub const Sample = struct {
 
             const floating = self.floating_display and self.show_motion;
             _ = gui.doSlider(
-                label(&buffer, "Motion before: {d:.0}%", .{self.floating_before * 100}),
+                label(&buffer, "Motion before: {d:.0}%###floating_before", .{self.floating_before * 100}),
                 0,
                 3,
                 &self.floating_before,
@@ -250,7 +251,7 @@ pub const Sample = struct {
                 floating,
             );
             _ = gui.doSlider(
-                label(&buffer, "Motion after: {d:.0}%", .{self.floating_after * 100}),
+                label(&buffer, "Motion after: {d:.0}%###floating_after", .{self.floating_after * 100}),
                 0,
                 3,
                 &self.floating_after,
@@ -272,10 +273,10 @@ pub const Sample = struct {
     }
 
     /// Rotation to apply for `duration` seconds of steering.
-    fn frameRotation(self: Sample, duration: f32) Quaternion {
+    fn frameRotation(self: Sample, duration: f32) Quat4f32 {
         // Upstream spells this `Quaternion::FromEuler({angle, 0, 0})`, whose
         // first component is the yaw; here that is an explicit rotation about Y.
-        return Quaternion.fromAxisAngle(.{ 0, 1, 0 }, self.angular_velocity * duration);
+        return quat.fromAxisAngle(.{ 0, 1, 0 }, self.angular_velocity * duration);
     }
 
     /// Appends one accumulated position, dropping the oldest samples so the
@@ -393,7 +394,7 @@ test "steering curves the accumulated path" {
     const b = curved.motion_sampler.current();
     try std.testing.expect(vec.norm(vec.sub(a.translation, b.translation)) > 0.1);
     // Steering also shows up in the accumulated orientation.
-    try std.testing.expect(!Quaternion.approxRotationEq(a.rotation, b.rotation, 0.999));
+    try std.testing.expect(!quat.approxRotationEq(a.rotation, b.rotation, 0.999));
 }
 
 test "disabling motion components freezes the character transform" {

@@ -16,7 +16,6 @@
 
 const std = @import("std");
 const ozz = @import("zig_ozz_animation");
-const rhi = @import("rhi");
 const fw = @import("framework");
 
 pub const name = "blend";
@@ -227,7 +226,7 @@ pub const Sample = struct {
             }
 
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Blend ratio: {d:.2}", .{self.blend_ratio}),
+                fw.im.formatZ(&buffer, "Blend ratio: {d:.2}###blend_ratio", .{self.blend_ratio}),
                 0,
                 1,
                 &self.blend_ratio,
@@ -239,7 +238,7 @@ pub const Sample = struct {
                 _ = gui.doSlider(
                     fw.im.formatZ(
                         &buffer,
-                        "Weight {d}: {d:.2}",
+                        "Weight {0d}: {1d:.2}###weight{0d}",
                         .{ index, sampler.weight },
                     ),
                     0,
@@ -251,7 +250,7 @@ pub const Sample = struct {
             }
 
             _ = gui.doSlider(
-                fw.im.formatZ(&buffer, "Threshold: {d:.2}", .{self.threshold}),
+                fw.im.formatZ(&buffer, "Threshold: {d:.2}###threshold", .{self.threshold}),
                 0.01,
                 1,
                 &self.threshold,
@@ -271,8 +270,8 @@ pub const Sample = struct {
             };
             for (&self.samplers, titles, 0..) |*sampler, title, index| {
                 if (!gui.openClose(title, true)) continue;
-                pushId(gui, index);
-                defer popId(gui);
+                gui.pushId(index);
+                defer gui.popId();
                 sampler.controller.onGui(gui, sampler.clip.duration(), self.manual, true);
             }
         }
@@ -284,25 +283,6 @@ pub const Sample = struct {
         return if (box.isValid()) box else null;
     }
 };
-
-/// Scopes widget identifiers, so the three identical `PlaybackController`
-/// panels do not collide inside Dear ImGui's id stack. `framework/im.zig`
-/// publishes no `pushId`, so the C api is reached directly; the body is not
-/// even analysed in a build without ImGui.
-fn pushId(gui: *fw.Im, index: usize) void {
-    if (fw.im.has_imgui) {
-        if (!gui.enabled) return;
-        rhi.imgui_c.ImGui_PushIDInt(@intCast(index));
-    }
-}
-
-/// Closes the scope opened by `pushId`.
-fn popId(gui: *fw.Im) void {
-    if (fw.im.has_imgui) {
-        if (!gui.enabled) return;
-        rhi.imgui_c.ImGui_PopID();
-    }
-}
 
 // -----------------------------------------------------------------------------
 // Tests. GPU-free: `init`, `onUpdate` and `onGui` never touch the renderer.

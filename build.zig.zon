@@ -33,8 +33,8 @@
     // internet connectivity.
     .dependencies = .{
         .caliper = .{
-            .url = "git+https://github.com/flying-swallow/caliper.git#1e71e54feabfeaf6bf3b0ee4cd3ca1389575a38b",
-            .hash = "caliper-0.3.0-8IlxzRUTBQBMCz2U1zCq4w8ZJwtZ06G0ZaMdl0bgDJnF",
+            .url = "git+https://github.com/flying-swallow/caliper.git#f9ad7b579e1e0b7665e4163727872b2173f2db8a",
+            .hash = "caliper-0.3.0-8IlxzQc_BQDgkwSX_kx82MraojHAyaiCKMAHbvSG-xD9",
         },
         .zgltf = .{
             .url = "git+https://github.com/flying-swallow/zgltf.git#ec52d477db346af99d4cdced4e35e67e1670023f",

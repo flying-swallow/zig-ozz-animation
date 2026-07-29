@@ -3,7 +3,7 @@ const math = @import("math.zig");
 const runtime = @import("animation.zig");
 
 pub const TranslationKey = struct { time: f32, value: math.Vec3f32 };
-pub const RotationKey = struct { time: f32, value: math.Quaternion };
+pub const RotationKey = struct { time: f32, value: math.Quat4f32 };
 pub const ScaleKey = struct { time: f32, value: math.Vec3f32 };
 
 pub const RawJointTrack = struct {
@@ -211,18 +211,13 @@ pub const AnimationBuilder = struct {
                 .value = key.value,
             });
             const r_start = rotations.items.len;
-            var previous_rotation = math.Quaternion.identity;
+            var previous_rotation = math.quat.identity;
             for (track.rotations, 0..) |key, key_index| {
-                var rotation = math.Quaternion.normalize(key.value);
-                if ((key_index == 0 and rotation.w < 0) or
-                    (key_index != 0 and math.Quaternion.dot(previous_rotation, rotation) < 0))
+                var rotation = math.quat.normalize(key.value);
+                if ((key_index == 0 and rotation[3] < 0) or
+                    (key_index != 0 and math.quat.dot(previous_rotation, rotation) < 0))
                 {
-                    rotation = .{
-                        .x = -rotation.x,
-                        .y = -rotation.y,
-                        .z = -rotation.z,
-                        .w = -rotation.w,
-                    };
+                    rotation = -rotation;
                 }
                 try rotations.append(allocator, .{
                     .ratio = key.time / raw.duration,
@@ -265,7 +260,7 @@ pub fn sampleJointTrack(track: RawJointTrack, time: f32) !math.Transform {
     }
     return .{
         .translation = sampleTimed(math.Vec3f32, TranslationKey, track.translations, time, @splat(0)),
-        .rotation = sampleTimed(math.Quaternion, RotationKey, track.rotations, time, .identity),
+        .rotation = sampleTimed(math.Quat4f32, RotationKey, track.rotations, time, math.quat.identity),
         .scale = sampleTimed(math.Vec3f32, ScaleKey, track.scales, time, @splat(1)),
     };
 }
@@ -292,7 +287,7 @@ fn sampleTimed(
     var i: usize = 0;
     while (i + 1 < keys.len and keys[i + 1].time <= time) : (i += 1) {}
     const alpha = (time - keys[i].time) / (keys[i + 1].time - keys[i].time);
-    if (T == math.Quaternion) return math.Quaternion.nlerp(keys[i].value, keys[i + 1].value, alpha);
+    if (T == math.Quat4f32) return math.quat.nlerp(keys[i].value, keys[i + 1].value, alpha);
     return math.approx.lerp_exact(keys[i].value, keys[i + 1].value, alpha);
 }
 
@@ -352,7 +347,8 @@ pub const FixedRateSamplingTime = struct {
     }
 };
 
-pub fn RawTrack(comptime T: type) type {
+pub fn RawTrack(comptime kind: runtime.ValueKind) type {
+    const T = kind.Value();
     return struct {
         const Self = @This();
         pub const Key = struct {
@@ -405,23 +401,22 @@ pub fn RawTrack(comptime T: type) type {
     };
 }
 
-pub const RawFloatTrack = RawTrack(f32);
-pub const RawFloat2Track = RawTrack(math.Vec2f32);
-pub const RawFloat3Track = RawTrack(math.Vec3f32);
-pub const RawFloat4Track = RawTrack(math.Float4);
-pub const RawQuaternionTrack = RawTrack(math.Quaternion);
+pub const RawFloatTrack = RawTrack(.float);
+pub const RawFloat2Track = RawTrack(.float2);
+pub const RawFloat3Track = RawTrack(.float3);
+pub const RawFloat4Track = RawTrack(.float4);
+pub const RawQuaternionTrack = RawTrack(.quaternion);
 
-fn defaultTrackValue(comptime T: type) T {
-    if (T == f32) return 0;
-    if (T == math.Vec2f32) return @splat(0);
-    if (T == math.Vec3f32) return @splat(0);
-    if (T == math.Float4) return .zero;
-    if (T == math.Quaternion) return .identity;
-    @compileError("unsupported track value type");
+fn defaultTrackValue(comptime kind: runtime.ValueKind) kind.Value() {
+    return switch (kind) {
+        .float => 0,
+        .float2, .float3, .float4 => @splat(0),
+        .quaternion => math.quat.identity,
+    };
 }
 
-pub fn sampleTrack(comptime T: type, raw: RawTrack(T), ratio_in: f32) T {
-    if (raw.keys.len == 0) return defaultTrackValue(T);
+pub fn sampleTrack(comptime kind: runtime.ValueKind, raw: RawTrack(kind), ratio_in: f32) kind.Value() {
+    if (raw.keys.len == 0) return defaultTrackValue(kind);
     const ratio = std.math.clamp(ratio_in, 0, 1);
     if (raw.keys.len == 1 or ratio <= raw.keys[0].ratio) return raw.keys[0].value;
     if (ratio >= raw.keys[raw.keys.len - 1].ratio) return raw.keys[raw.keys.len - 1].value;
@@ -429,16 +424,16 @@ pub fn sampleTrack(comptime T: type, raw: RawTrack(T), ratio_in: f32) T {
     while (i + 1 < raw.keys.len and raw.keys[i + 1].ratio <= ratio) : (i += 1) {}
     if (raw.keys[i].interpolation == .step) return raw.keys[i].value;
     const alpha = (ratio - raw.keys[i].ratio) / (raw.keys[i + 1].ratio - raw.keys[i].ratio);
-    return lerpValue(T, raw.keys[i].value, raw.keys[i + 1].value, alpha);
+    return lerpValue(kind, raw.keys[i].value, raw.keys[i + 1].value, alpha);
 }
 
 pub fn buildTrack(
-    comptime T: type,
+    comptime kind: runtime.ValueKind,
     allocator: std.mem.Allocator,
-    raw: RawTrack(T),
-) !runtime.Track(T) {
+    raw: RawTrack(kind),
+) !runtime.Track(kind) {
     if (!raw.validate()) return runtime.Error.InvalidKeyframe;
-    const RuntimeKey = runtime.Track(T).Key;
+    const RuntimeKey = runtime.Track(kind).Key;
     const key_count: usize = if (raw.keys.len == 0)
         0
     else if (raw.keys.len == 1)
@@ -485,69 +480,57 @@ pub fn buildTrack(
             .interpolation = .linear,
         };
     }
-    if (T == math.Quaternion) {
-        var previous = math.Quaternion.identity;
+    if (kind == .quaternion) {
+        var previous = math.quat.identity;
         for (keys, 0..) |*key, i| {
-            var normalized = math.Quaternion.normalize(key.value);
-            if ((i == 0 and normalized.w < 0) or
-                (i != 0 and math.Quaternion.dot(previous, normalized) < 0))
+            var normalized = math.quat.normalize(key.value);
+            if ((i == 0 and normalized[3] < 0) or
+                (i != 0 and math.quat.dot(previous, normalized) < 0))
             {
-                normalized = .{
-                    .x = -normalized.x,
-                    .y = -normalized.y,
-                    .z = -normalized.z,
-                    .w = -normalized.w,
-                };
+                normalized = -normalized;
             }
             key.value = normalized;
             previous = normalized;
         }
     }
-    return runtime.Track(T).initMixed(allocator, raw.name, keys);
+    return runtime.Track(kind).initMixed(allocator, raw.name, keys);
 }
 
-fn valueDistance(comptime T: type, a: T, b: T) f32 {
-    if (T == f32) return @abs(a - b);
-    if (T == math.Vec2f32) return math.vec.norm(math.vec.sub(a, b));
-    if (T == math.Vec3f32) return math.vec.norm(math.vec.sub(a, b));
-    if (T == math.Float4) {
-        const x = a.x - b.x;
-        const y = a.y - b.y;
-        const z = a.z - b.z;
-        const w = a.w - b.w;
-        return @sqrt(x * x + y * y + z * z + w * w);
+fn valueDistance(comptime kind: runtime.ValueKind, a: kind.Value(), b: kind.Value()) f32 {
+    if (kind == .float) return @abs(a - b);
+    if (kind == .float2 or kind == .float3 or kind == .float4) {
+        return math.vec.norm(math.vec.sub(a, b));
     }
-    if (T == math.Quaternion) {
-        const d = std.math.clamp(@abs(math.Quaternion.dot(a, b)), 0, 1);
+    if (kind == .quaternion) {
+        const d = std.math.clamp(@abs(math.quat.dot(a, b)), 0, 1);
         return 2 * @sqrt(@max(1 - d * d, 0));
     }
     @compileError("unsupported track value type");
 }
 
-fn lerpValue(comptime T: type, a: T, b: T, t: f32) T {
-    if (T == f32) return a + (b - a) * t;
-    if (T == math.Vec2f32) return math.approx.lerp_exact(a, b, t);
-    if (T == math.Vec3f32) return math.approx.lerp_exact(a, b, t);
-    if (T == math.Float4) return math.Float4.lerp(a, b, t);
-    if (T == math.Quaternion) return math.Quaternion.nlerp(a, b, t);
-    @compileError("unsupported track value type");
+fn lerpValue(comptime kind: runtime.ValueKind, a: kind.Value(), b: kind.Value(), t: f32) kind.Value() {
+    return switch (kind) {
+        .float => a + (b - a) * t,
+        .float2, .float3, .float4 => math.approx.lerp_exact(a, b, t),
+        .quaternion => math.quat.nlerp(a, b, t),
+    };
 }
 
 pub fn optimizeTrack(
-    comptime T: type,
+    comptime kind: runtime.ValueKind,
     allocator: std.mem.Allocator,
-    raw: RawTrack(T),
+    raw: RawTrack(kind),
     tolerance: f32,
-) !RawTrack(T) {
+) !RawTrack(kind) {
     if (!raw.validate()) return runtime.Error.InvalidKeyframe;
-    const Key = RawTrack(T).Key;
-    if (raw.keys.len == 0) return RawTrack(T).init(allocator, raw.name, raw.keys);
+    const Key = RawTrack(kind).Key;
+    if (raw.keys.len == 0) return RawTrack(kind).init(allocator, raw.name, raw.keys);
     if (raw.keys.len == 1) {
-        const keys = if (valueDistance(T, defaultTrackValue(T), raw.keys[0].value) <= tolerance)
+        const keys = if (valueDistance(kind, defaultTrackValue(kind), raw.keys[0].value) <= tolerance)
             raw.keys[0..0]
         else
             raw.keys;
-        return RawTrack(T).init(allocator, raw.name, keys);
+        return RawTrack(kind).init(allocator, raw.name, keys);
     }
 
     const Segment = struct { first: usize, last: usize };
@@ -572,7 +555,7 @@ pub fn optimizeTrack(
                 break;
             }
             const alpha = (key.ratio - left.ratio) / (right.ratio - left.ratio);
-            const distance = valueDistance(T, lerpValue(T, left.value, right.value, alpha), key.value);
+            const distance = valueDistance(kind, lerpValue(kind, left.value, right.value, alpha), key.value);
             if (distance > tolerance and distance > maximum) {
                 maximum = distance;
                 candidate = i;
@@ -600,13 +583,13 @@ pub fn optimizeTrack(
         const back = output.items[output.items.len - 1];
         if (!last_key and back.interpolation == .step) break;
         const previous = if (last_key)
-            defaultTrackValue(T)
+            defaultTrackValue(kind)
         else
             output.items[output.items.len - 2].value;
-        if (valueDistance(T, previous, back.value) > tolerance) break;
+        if (valueDistance(kind, previous, back.value) > tolerance) break;
         _ = output.pop();
     }
-    return RawTrack(T).init(allocator, raw.name, output.items);
+    return RawTrack(kind).init(allocator, raw.name, output.items);
 }
 
 fn cloneRawAnimation(allocator: std.mem.Allocator, input: RawAnimation) !RawAnimation {
@@ -685,14 +668,14 @@ fn rotationReference(
     skeleton: runtime.Skeleton,
     joint: usize,
     reference: MotionReference,
-) math.Quaternion {
+) math.Quat4f32 {
     return switch (reference) {
-        .absolute => .identity,
+        .absolute => math.quat.identity,
         .skeleton => skeleton.jointRestPose(joint).rotation,
         .animation => if (input.tracks[joint].rotations.len > 0)
             input.tracks[joint].rotations[0].value
         else
-            .identity,
+            math.quat.identity,
     };
 }
 
@@ -735,12 +718,12 @@ pub fn extractMotion(
     var rotation_keys: std.ArrayList(RawQuaternionTrack.Key) = .empty;
     defer rotation_keys.deinit(allocator);
     for (source.rotations, 0..) |key, i| {
-        const relative = math.Quaternion.normalize(math.Quaternion.mul(
+        const relative = math.quat.normalize(math.quat.mul(
             key.value,
-            math.Quaternion.conjugate(rotation_ref),
+            math.quat.conjugate(rotation_ref),
         ));
-        const extracted_euler = selected3(math.Quaternion.toEuler(relative), options.rotation);
-        const extracted = math.Quaternion.fromEuler(extracted_euler);
+        const extracted_euler = selected3(math.quat.toEuler(relative), options.rotation);
+        const extracted = math.quat.fromEuler(extracted_euler);
         try rotation_keys.append(allocator, .{
             .interpolation = .linear,
             .ratio = key.time / input.duration,
@@ -748,8 +731,8 @@ pub fn extractMotion(
         });
         if (options.rotation.bake) {
             baked.tracks[options.root_joint].rotations[i].value =
-                math.Quaternion.normalize(math.Quaternion.mul(
-                    math.Quaternion.conjugate(extracted),
+                math.quat.normalize(math.quat.mul(
+                    math.quat.conjugate(extracted),
                     key.value,
                 ));
         }
@@ -771,18 +754,18 @@ pub fn extractMotion(
         }
     }
     if (options.rotation.loop and rotation.keys.len > 1) {
-        const delta = math.Quaternion.mul(
+        const delta = math.quat.mul(
             rotation.keys[0].value,
-            math.Quaternion.conjugate(rotation.keys[rotation.keys.len - 1].value),
+            math.quat.conjugate(rotation.keys[rotation.keys.len - 1].value),
         );
         const denominator: f32 = @floatFromInt(rotation.keys.len - 1);
         for (rotation.keys, 0..) |*key, i| {
-            const correction = math.Quaternion.nlerp(
-                .identity,
+            const correction = math.quat.nlerp(
+                math.quat.identity,
                 delta,
                 @as(f32, @floatFromInt(i)) / denominator,
             );
-            key.value = math.Quaternion.normalize(math.Quaternion.mul(correction, key.value));
+            key.value = math.quat.normalize(math.quat.mul(correction, key.value));
         }
     }
 
@@ -793,9 +776,9 @@ pub fn extractMotion(
     // rotation track at each translation key, matching Ozz's extractor.
     if (options.rotation.bake) {
         for (baked.tracks[options.root_joint].translations, position.keys) |*joint_key, motion_key| {
-            const motion_rotation = sampleTrack(math.Quaternion, rotation, motion_key.ratio);
-            joint_key.value = math.Quaternion.rotate(
-                math.Quaternion.conjugate(motion_rotation),
+            const motion_rotation = sampleTrack(.quaternion, rotation, motion_key.ratio);
+            joint_key.value = math.quat.rotate(
+                math.quat.conjugate(motion_rotation),
                 joint_key.value,
             );
         }
@@ -820,15 +803,15 @@ pub fn buildAdditive(
         else
             .{
                 .translation = if (track.translations.len > 0) track.translations[0].value else @splat(0),
-                .rotation = if (track.rotations.len > 0) track.rotations[0].value else .identity,
+                .rotation = if (track.rotations.len > 0) track.rotations[0].value else math.quat.identity,
                 .scale = if (track.scales.len > 0) track.scales[0].value else @splat(1),
             };
         for (output.tracks[i].translations) |*key| {
             key.value = math.vec.sub(key.value, reference.translation);
         }
-        const inv_rotation = math.Quaternion.conjugate(reference.rotation);
+        const inv_rotation = math.quat.conjugate(reference.rotation);
         for (output.tracks[i].rotations) |*key| {
-            key.value = math.Quaternion.normalize(math.Quaternion.mul(inv_rotation, key.value));
+            key.value = math.quat.normalize(math.quat.mul(inv_rotation, key.value));
         }
         for (output.tracks[i].scales) |*key| {
             key.value = .{
@@ -842,7 +825,7 @@ pub fn buildAdditive(
 }
 
 fn decimateTimed(
-    comptime T: type,
+    comptime kind: runtime.ValueKind,
     comptime Key: type,
     allocator: std.mem.Allocator,
     keys: []const Key,
@@ -850,9 +833,9 @@ fn decimateTimed(
     distance_scale: f32,
     comptime rotation_distance: bool,
 ) ![]Key {
-    const identity: T = if (T == math.Quaternion)
-        math.Quaternion.identity
-    else if (T == math.Vec3f32 and Key == ScaleKey)
+    const identity: kind.Value() = if (kind == .quaternion)
+        math.quat.identity
+    else if (Key == ScaleKey)
         @splat(1)
     else
         @splat(0);
@@ -861,9 +844,9 @@ fn decimateTimed(
         var output = try allocator.dupe(Key, keys);
         if (output.len == 1) {
             const distance = if (rotation_distance) blk: {
-                const dot = @abs(math.Quaternion.dot(identity, output[0].value));
+                const dot = @abs(math.quat.dot(identity, output[0].value));
                 break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
-            } else valueDistance(T, identity, output[0].value) * distance_scale;
+            } else valueDistance(kind, identity, output[0].value) * distance_scale;
             if (distance <= tolerance) {
                 allocator.free(output);
                 output = try allocator.alloc(Key, 0);
@@ -890,11 +873,11 @@ fn decimateTimed(
         for (segment.first + 1..segment.last) |i| {
             const middle = keys[i];
             const alpha = (middle.time - left.time) / (right.time - left.time);
-            const interpolated = lerpValue(T, left.value, right.value, alpha);
+            const interpolated = lerpValue(kind, left.value, right.value, alpha);
             const distance = if (rotation_distance) blk: {
-                const dot = @abs(math.Quaternion.dot(middle.value, interpolated));
+                const dot = @abs(math.quat.dot(middle.value, interpolated));
                 break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
-            } else valueDistance(T, middle.value, interpolated) * distance_scale;
+            } else valueDistance(kind, middle.value, interpolated) * distance_scale;
             if (distance > tolerance and distance > maximum) {
                 maximum = distance;
                 candidate = i;
@@ -925,9 +908,9 @@ fn decimateTimed(
         else
             output.items[output.items.len - 2].value;
         const distance = if (rotation_distance) blk: {
-            const dot = @abs(math.Quaternion.dot(previous, back.value));
+            const dot = @abs(math.quat.dot(previous, back.value));
             break :blk 2 * @sqrt(@max(1 - @min(1, dot * dot), 0)) * distance_scale;
-        } else valueDistance(T, previous, back.value) * distance_scale;
+        } else valueDistance(kind, previous, back.value) * distance_scale;
         if (distance > tolerance) break;
         _ = output.pop();
     }
@@ -1053,7 +1036,7 @@ pub fn optimizeAnimation(
     errdefer output.deinit();
     for (input.tracks, 0..) |track, i| {
         output.tracks[i].translations = try decimateTimed(
-            math.Vec3f32,
+            .float3,
             TranslationKey,
             allocator,
             track.translations,
@@ -1065,7 +1048,7 @@ pub fn optimizeAnimation(
             false,
         );
         output.tracks[i].rotations = try decimateTimed(
-            math.Quaternion,
+            .quaternion,
             RotationKey,
             allocator,
             track.rotations,
@@ -1074,7 +1057,7 @@ pub fn optimizeAnimation(
             true,
         );
         output.tracks[i].scales = try decimateTimed(
-            math.Vec3f32,
+            .float3,
             ScaleKey,
             allocator,
             track.scales,
@@ -1117,7 +1100,7 @@ test "raw sampling, additive building, and key reduction" {
         .{ .interpolation = .linear, .ratio = 1, .value = 1 },
     });
     defer raw_track.deinit();
-    var optimized_track = try optimizeTrack(f32, allocator, raw_track, 1e-4);
+    var optimized_track = try optimizeTrack(.float, allocator, raw_track, 1e-4);
     defer optimized_track.deinit();
     try std.testing.expectEqual(@as(usize, 2), optimized_track.keys.len);
 }

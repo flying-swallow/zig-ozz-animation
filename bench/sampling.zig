@@ -36,9 +36,9 @@ pub fn main(init: std.process.Init) !void {
             .{ .ratio = 1, .value = @splat(0) },
         };
         rotation_keys[i] = .{
-            .{ .ratio = 0, .value = .identity },
-            .{ .ratio = 0.5, .value = ozz.math.Quaternion.fromAxisAngle(.{ 0, 1, 0 }, 1) },
-            .{ .ratio = 1, .value = .identity },
+            .{ .ratio = 0, .value = ozz.math.quat.identity },
+            .{ .ratio = 0.5, .value = ozz.math.quat.fromAxisAngle(.{ 0, 1, 0 }, 1) },
+            .{ .ratio = 1, .value = ozz.math.quat.identity },
         };
         scale_keys[i] = .{
             .{ .ratio = 0, .value = @splat(1) },

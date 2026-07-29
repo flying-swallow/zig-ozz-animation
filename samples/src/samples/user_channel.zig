@@ -89,7 +89,7 @@ pub const Sample = struct {
         }
 
         var track_reader = std.Io.Reader.fixed(assets.trackOr(@embedFile("robot_grasp")));
-        var track = try ozz.legacy.readTrack(f32, allocator, &track_reader, .{});
+        var track = try ozz.legacy.readTrack(.float, allocator, &track_reader, .{});
         errdefer track.deinit();
 
         const models = try allocator.alloc(Float4x4, skeleton.numJoints());
@@ -191,7 +191,7 @@ pub const Sample = struct {
 
             // Not exposed upstream, where the threshold is hard coded to 0.
             _ = gui.doSlider(
-                label(&buffer, "Threshold: {d:.2}", .{self.threshold}),
+                label(&buffer, "Threshold: {d:.2}###threshold", .{self.threshold}),
                 0,
                 1,
                 &self.threshold,
